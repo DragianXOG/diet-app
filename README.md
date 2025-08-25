@@ -12,3 +12,7 @@ Local dev steps:
 2) source .venv/bin/activate
 3) pip install -r requirements.txt
 4) uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload
+
+## Configuration
+Copy `.env.example` to `.env` and edit values. The app currently uses `PORT` only.
+
