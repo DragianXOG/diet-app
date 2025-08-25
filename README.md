@@ -2,6 +2,11 @@
 
 Minimal FastAPI scaffold.
 
+## Deploy (systemd user)
+1) ./scripts/install.sh
+2) ./scripts/status.sh
+3) ./scripts/logs.sh
+
 Local dev steps:
 1) python3 -m venv .venv
 2) source .venv/bin/activate
