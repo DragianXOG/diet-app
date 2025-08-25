@@ -4,6 +4,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .core.logging import init_logging
 from .api.routes import router as api_router
+from .core.db import init_db
 
 init_logging(settings.LOG_LEVEL)
 
@@ -18,6 +19,10 @@ app.add_middleware(
     allow_headers=["*"],
     allow_credentials=False,
 )
+
+@app.on_event("startup")
+def _startup():
+    init_db()
 
 @app.get("/")
 def read_root():
