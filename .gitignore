@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.venv/
+# Env/secrets
+.env
+*.env
+# Tooling
+.uvicorn.pid
+.pytest_cache/
+.coverage
+dist/
+build/
+# OS/IDE
+.DS_Store
+.idea/
+.vscode/
