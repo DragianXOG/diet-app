@@ -28,7 +28,7 @@ echo "[deploy] running migrations…"
 ./.venv/bin/alembic -c alembic.ini upgrade head
 
 echo "[deploy] restarting service…"
-systemctl --user restart diet-app.service
+systemctl --user reload diet-app.service || systemctl --user restart diet-app.service
 sleep 2
 systemctl --user is-active --quiet diet-app.service && echo "[deploy] service is active"
 
