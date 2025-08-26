@@ -11,9 +11,33 @@ class Ping(SQLModel, table=True):
 class User(SQLModel, table=True):
     __tablename__ = "users"
     id: Optional[int] = Field(default=None, primary_key=True)
-    # enforce uniqueness at DB level
-    email: str = Field(
-        sa_column=sa.Column(sa.String(254), unique=True, index=True, nullable=False)
-    )
+    email: str = Field(sa_column=sa.Column(sa.String(254), unique=True, index=True, nullable=False))
     password_hash: str = Field(nullable=False)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+
+class Meal(SQLModel, table=True):
+    __tablename__ = "meals"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(sa_column=sa.Column(sa.Integer, sa.ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False))
+    name: str = Field(sa_column=sa.Column(sa.String(120), nullable=False))
+    eaten_at: datetime = Field(default_factory=datetime.utcnow, sa_column=sa.Column(sa.DateTime, index=True, nullable=False))
+    total_calories: Optional[int] = Field(default=None)
+
+class MealItem(SQLModel, table=True):
+    __tablename__ = "meal_items"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    meal_id: int = Field(sa_column=sa.Column(sa.Integer, sa.ForeignKey("meals.id", ondelete="CASCADE"), index=True, nullable=False))
+    name: str = Field(sa_column=sa.Column(sa.String(120), nullable=False))
+    calories: Optional[int] = Field(default=None)
+    quantity: Optional[float] = Field(default=None)
+    unit: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(24)))
+
+class GroceryItem(SQLModel, table=True):
+    __tablename__ = "grocery_items"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(sa_column=sa.Column(sa.Integer, sa.ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False))
+    name: str = Field(sa_column=sa.Column(sa.String(120), nullable=False))
+    quantity: Optional[float] = Field(default=None)
+    unit: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(24)))
+    purchased: bool = Field(default=False, sa_column=sa.Column(sa.Boolean, index=True, nullable=False))
+    created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=sa.Column(sa.DateTime, index=True, nullable=False))

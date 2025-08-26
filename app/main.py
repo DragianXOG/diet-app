@@ -6,6 +6,7 @@ from .core.logging import init_logging
 from .core.db import init_db
 from .api.routes import router as api_router
 from .api.auth import router as auth_router
+from .api.diet import router as diet_router
 
 init_logging(settings.LOG_LEVEL)
 app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
@@ -35,3 +36,4 @@ def health():
 # Routers
 app.include_router(api_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1/auth")
+app.include_router(diet_router, prefix="/api/v1")
