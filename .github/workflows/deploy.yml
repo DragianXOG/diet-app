@@ -1,0 +1,22 @@
+name: Deploy (self-hosted)
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64, prod]
+    steps:
+      - name: Runner info
+        run: |
+          echo "Runner: $RUNNER_NAME @ $(hostname -f)"
+          echo "Commit: $GITHUB_SHA"
+      - name: Deploy on host
+        run: |
+          bash ~/diet-app/scripts/deploy.sh
