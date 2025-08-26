@@ -31,3 +31,17 @@ def create_ping(payload: PingIn, session: Session = Depends(get_session)):
 def list_pings(session: Session = Depends(get_session)):
     rows = session.exec(select(Ping).order_by(Ping.id.desc()).limit(5)).all()
     return [{"id": r.id, "msg": r.msg, "created_at": r.created_at.isoformat()} for r in rows]
+
+# --- OAuth2 password flow (for Swagger UI) ---
+from fastapi.security import OAuth2PasswordRequestForm
+from ..core.security import verify_password, create_access_token
+
+@router.post("/auth/token")
+def login_token(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
+    """OAuth2 password grant endpoint for Swagger UI.
+    Uses 'username' as the email field."""
+    user = session.exec(select(User).where(User.email == form_data.username)).first()
+    if not user or not verify_password(form_data.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = create_access_token(str(user.id))
+    return {"access_token": token, "token_type": "bearer"}
