@@ -35,6 +35,7 @@ def list_pings(session: Session = Depends(get_session)):
 # --- OAuth2 password flow (for Swagger UI) ---
 from fastapi.security import OAuth2PasswordRequestForm
 from ..core.security import verify_password, create_access_token
+from ..models import User
 
 @router.post("/auth/token")
 def login_token(form_data: OAuth2PasswordRequestForm = Depends(), session: Session = Depends(get_session)):
