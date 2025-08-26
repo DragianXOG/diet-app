@@ -18,3 +18,10 @@ build/
 .DS_Store
 .idea/
 .vscode/
+
+# Runtime / ops artifacts
+logs/
+certs/
+data/
+*.dump
+*.sha256

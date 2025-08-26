@@ -1,0 +1,10 @@
+[Unit]
+Description=Run diet-backup.service nightly at 03:15
+
+[Timer]
+OnCalendar=*-*-* 03:15:00
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

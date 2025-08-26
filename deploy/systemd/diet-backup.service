@@ -1,0 +1,12 @@
+[Unit]
+Description=Diet App - Nightly PostgreSQL Backup
+
+[Service]
+Type=oneshot
+Environment=REPO_DIR=/home/dx/diet-app
+Environment=BACKUP_DIR=/home/dx/backups/diet-app
+Environment=RETENTION_COUNT=30
+ExecStart=/home/dx/diet-app/scripts/backup.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

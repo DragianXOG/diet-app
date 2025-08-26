@@ -1,0 +1,7 @@
+[Unit]
+Description=Diet App - Nightly Restore Test
+
+[Service]
+Type=oneshot
+Environment=BACKUP_DIR=/home/dx/backups/diet-app
+ExecStart=/home/dx/diet-app/scripts/restore_test.sh

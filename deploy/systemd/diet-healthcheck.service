@@ -1,0 +1,13 @@
+[Unit]
+Description=Diet App - Health Check
+
+[Service]
+Type=oneshot
+Environment=HEALTH_URL=https://dxs.local/health
+Environment=TIMEOUT=4
+Environment=RETRIES=1
+# Uncomment to enable webhook + auto-restart:
+# Environment=WEBHOOK_URL=https://hooks.slack.com/services/XXX/YYY/ZZZ
+# Environment=AUTO_RESTART=yes
+# Environment=RESTART_AFTER_FAILS=3
+ExecStart=/home/dx/diet-app/scripts/healthcheck.sh
