@@ -1,5 +1,9 @@
 import os
 from typing import List
+from dotenv import load_dotenv
+
+# Load .env at import time so gunicorn workers get env vars
+load_dotenv()
 
 class Settings:
     APP_NAME: str = os.getenv("APP_NAME", "Diet App")
@@ -7,7 +11,8 @@ class Settings:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # CORS
-    CORS_ORIGINS: List[str] = [o.strip() for o in os.getenv("CORS_ORIGINS", "*").split(",")]
+    _CORS: str = os.getenv("CORS_ORIGINS", "*")
+    CORS_ORIGINS: List[str] = [o.strip() for o in _CORS.split(",") if o.strip()]
 
     # Auth
     SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-change-me")
