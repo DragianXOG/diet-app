@@ -1,0 +1,49 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* App background + typography */
+:root { color-scheme: light dark; }
+html, body { height: 100%; }
+  @apply leading-normal md:leading-relaxed;
+body {
+  @apply leading-normal md:leading-relaxed;
+  @apply min-h-screen bg-gradient-to-b from-background to-muted/40 text-foreground;
+  font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+/* Make buttons breathe a bit when adjacent */
+button + button { margin-left: .5rem; }
+
+/* Focus styles for inputs */
+input, textarea, select {
+  @apply focus:outline-none focus:ring-2 focus:ring-primary/60 focus:border-primary/60;
+}
+
+/* Cards get soft shadow by default */
+.card-shadow { @apply shadow-soft; }
+
+/* === Brand + layout polish === */
+header .brand-title { @apply text-primary; }
+.card-section-title { @apply text-primary; }
+
+/* === Workouts checklist: one item per line, grouped per day === */
+.workouts-list label {
+  @apply block rounded-xl border p-3 bg-white/80 dark:bg-zinc-900/70;
+}
+.workouts-list label + label { @apply mt-2; }
+
+/* === Brand + layout polish === */
+header .brand-title { @apply text-primary; }
+.card-section-title { @apply text-primary; }
+
+/* === Workouts checklist: one item per line, grouped per day === */
+.workouts-list label {
+  @apply block rounded-xl border p-3 bg-white/80 dark:bg-zinc-900/70;
+}
+.workouts-list label + label { @apply mt-2; }
+
+/* Brand accents */
+a { color: #4B0082; }
+table thead { background: #4B0082; color: #fff; }
+button[variant="secondary"], .btn-secondary { background: #4CBB17 !important; color: #000 !important; border-color: #4CBB17 !important; }
