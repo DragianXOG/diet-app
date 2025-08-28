@@ -267,20 +267,13 @@ updateWho();
 </body>
 </html>"""
 
-# --- Intake endpoints (file-backed + Postgres RLS) ---
+
+# --- Intake endpoints (file-backed) ---
 from pathlib import Path as _Path
 import json as _json, time as _time
 from typing import Optional as _Optional
 from pydantic import BaseModel as _BaseModel
 from fastapi.responses import JSONResponse as _JSONResponse
-from fastapi import Depends
-
-# If your app provides get_current_user (JWT), use it; else allow None
-try:
-    get_current_user
-except NameError:
-    def get_current_user():
-        return None
 
 class IntakeIn(_BaseModel):
     name: _Optional[str] = None
@@ -302,9 +295,9 @@ _INTAKE_PATH = _DATA_DIR / "intake.json"
 
 @app.post("/api/v1/intake")
 @app.post("/intake")
-async def save_intake(body: IntakeIn, current_user: dict | None = Depends(get_current_user)):
+async def save_intake(body: IntakeIn, current_user: dict | None = None):
     try:
-        # Prefer Postgres + RLS if configured and user is authenticated
+        # Prefer Postgres if DATABASE_URL is set
         conn = _pg_conn()
         if conn is not None and current_user and current_user.get('id'):
             _pg_set_user(conn, int(current_user['id']))
@@ -316,20 +309,31 @@ async def save_intake(body: IntakeIn, current_user: dict | None = Depends(get_cu
             with conn.cursor() as cur:
                 cur.execute(f"INSERT INTO life.intakes ({cols}) VALUES ({placeholders}) RETURNING id", values)
                 new_id = cur.fetchone()[0]
-            return {"ok": True, "db": "postgres", "id": new_id}
+            return {'ok': True, 'db': 'postgres', 'id': new_id}
+        # else: fall back to file storage
 
-        # Fallback to JSON file storage (works without auth/DB)
         items = []
         if _INTAKE_PATH.exists():
             try:
+        # Prefer Postgres if DATABASE_URL is set
+            conn = _pg_conn()
+        if conn is not None and current_user and current_user.get('id'):
+            _pg_set_user(conn, int(current_user['id']))
+            fields = body.model_dump(exclude_none=True)
+            fields['user_id'] = int(current_user['id'])
+            cols = ','.join(fields.keys())
+            placeholders = ','.join(['%s']*len(fields))
+            values = list(fields.values())
+            with conn.cursor() as cur:
+                cur.execute(f"INSERT INTO life.intakes ({cols}) VALUES ({placeholders}) RETURNING id", values)
+                new_id = cur.fetchone()[0]
+            return {'ok': True, 'db': 'postgres', 'id': new_id}
+        # else: fall back to file storage
+
                 items = _json.loads(_INTAKE_PATH.read_text() or "[]")
             except Exception:
                 items = []
-        entry = {
-            "ts": int(_time.time()),
-            "user_id": (current_user.get('id') if current_user else None),
-            **{k: v for k, v in body.model_dump().items() if v is not None}
-        }
+        entry = {"ts": int(_time.time()), **{k: v for k, v in body.model_dump().items() if v is not None}}
         items.append(entry)
         _INTAKE_PATH.write_text(_json.dumps(items, indent=2))
         return {"ok": True, "path": str(_INTAKE_PATH), "saved": True, "received": entry}

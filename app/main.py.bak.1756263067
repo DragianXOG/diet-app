@@ -1,27 +1,5 @@
 import time
 from fastapi import FastAPI
-
-# === Postgres helper (optional) ===
-import os
-DB_URL = os.getenv("DATABASE_URL")
-_psyc = None
-_conn = None
-
-def _pg_conn():
-    global _psyc, _conn
-    if not DB_URL:
-        return None
-    if _psyc is None:
-        import psycopg as _psyc  # lazy import
-    if _conn is None or _conn.closed:
-        _conn = _psyc.connect(DB_URL, autocommit=True)
-    return _conn
-
-def _pg_set_user(conn, user_id: int):
-    if not conn: return
-    with conn.cursor() as cur:
-        cur.execute("SET app.user_id = %s", (user_id,))
-
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .core.logging import init_logging
@@ -31,26 +9,13 @@ from .api.auth import router as auth_router
 from .api.diet import router as diet_router
 
 init_logging(settings.LOG_LEVEL)
-ALLOW_ORIGINS = [
-  "http://192.168.40.184:8080", "http://localhost:8080", "http://127.0.0.1:8080",
-  "http://localhost:5173", "http://127.0.0.1:5173"
-]
-
 app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=ALLOW_ORIGINS,
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=False,
-)
 
 # CORS
 allow_origins = ["*"] if settings.CORS_ORIGINS == ["*"] else settings.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://192.168.40.184:8080","http://localhost:8080","http://127.0.0.1:8080","http://localhost:5173","http://127.0.0.1:5173"],
+    allow_origins=allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
     allow_credentials=False,
@@ -266,73 +231,3 @@ updateWho();
 </script>
 </body>
 </html>"""
-
-# --- Intake endpoints (file-backed + Postgres RLS) ---
-from pathlib import Path as _Path
-import json as _json, time as _time
-from typing import Optional as _Optional
-from pydantic import BaseModel as _BaseModel
-from fastapi.responses import JSONResponse as _JSONResponse
-from fastapi import Depends
-
-# If your app provides get_current_user (JWT), use it; else allow None
-try:
-    get_current_user
-except NameError:
-    def get_current_user():
-        return None
-
-class IntakeIn(_BaseModel):
-    name: _Optional[str] = None
-    age: _Optional[int] = None
-    sex: _Optional[str] = None
-    height_in: _Optional[int] = None
-    weight_lb: _Optional[int] = None
-    diabetic: _Optional[bool] = None
-    conditions: _Optional[str] = None
-    meds: _Optional[str] = None
-    goals: _Optional[str] = None
-    zip: _Optional[str] = None
-    gym: _Optional[str] = None
-    email: _Optional[str] = None
-
-_DATA_DIR = _Path(__file__).resolve().parent.parent / "data"
-_DATA_DIR.mkdir(parents=True, exist_ok=True)
-_INTAKE_PATH = _DATA_DIR / "intake.json"
-
-@app.post("/api/v1/intake")
-@app.post("/intake")
-async def save_intake(body: IntakeIn, current_user: dict | None = Depends(get_current_user)):
-    try:
-        # Prefer Postgres + RLS if configured and user is authenticated
-        conn = _pg_conn()
-        if conn is not None and current_user and current_user.get('id'):
-            _pg_set_user(conn, int(current_user['id']))
-            fields = body.model_dump(exclude_none=True)
-            fields['user_id'] = int(current_user['id'])
-            cols = ','.join(fields.keys())
-            placeholders = ','.join(['%s']*len(fields))
-            values = list(fields.values())
-            with conn.cursor() as cur:
-                cur.execute(f"INSERT INTO life.intakes ({cols}) VALUES ({placeholders}) RETURNING id", values)
-                new_id = cur.fetchone()[0]
-            return {"ok": True, "db": "postgres", "id": new_id}
-
-        # Fallback to JSON file storage (works without auth/DB)
-        items = []
-        if _INTAKE_PATH.exists():
-            try:
-                items = _json.loads(_INTAKE_PATH.read_text() or "[]")
-            except Exception:
-                items = []
-        entry = {
-            "ts": int(_time.time()),
-            "user_id": (current_user.get('id') if current_user else None),
-            **{k: v for k, v in body.model_dump().items() if v is not None}
-        }
-        items.append(entry)
-        _INTAKE_PATH.write_text(_json.dumps(items, indent=2))
-        return {"ok": True, "path": str(_INTAKE_PATH), "saved": True, "received": entry}
-    except Exception as e:
-        return _JSONResponse({"ok": False, "error": str(e)}, status_code=500)
-# --- end intake endpoints ---

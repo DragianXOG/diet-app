@@ -1,3 +1,4 @@
+import SimpleAuthFlow from "./components/auth/SimpleAuthFlow.jsx";
 import React, { useEffect, useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -633,19 +634,18 @@ export default function App() {
 
   return (
     <div className="min-h-[100dvh] bg-gradient-to-b from-background to-muted/30">
-      <header className="sticky top-0 z-10 backdrop-blur bg-primary text-white border-b shadow-soft">
-        <div className="w-full px-6 py-4 flex items-center justify-between">
+      <header className="sticky top-0 z-10 backdrop-blur bg-[#4B0082] text-white border-b shadow-soft shadow-soft">
+        <div className="w-full px-6 py-4 flex items-center justify-center">
           <div className="flex items-center gap-3">
+            <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-white ml-2">Life – Health</h1>
             <motion.div initial={{ rotate: -8 }} animate={{ rotate: 0 }}>
               <Utensils className="w-6 h-6 text-primary"/>
             </motion.div>
             <div>
               <div className="font-bold leading-tight brand-title">Diet‑App Frontend</div>
-              <div className="text-xs text-muted-foreground">Base: <code>{api.baseUrl}</code></div>
             </div>
           </div>
           <div className="hidden md:flex items-center gap-4 text-xs text-muted-foreground">
-            <Badge variant="outline" className="rounded-full">v0.1</Badge>
           </div>
         </div>
       </header>
@@ -653,16 +653,13 @@ export default function App() {
       <main className="w-full px-6 py-6 md:py-8 lg:py-10 grid gap-5 md:gap-8 lg:gap-10">
         <Tabs value={active} onValueChange={setActive} className="w-full">
           <TabsList className="flex flex-wrap gap-2">
-            <TabsTrigger value="settings" className="gap-2"><Settings className="w-4 h-4"/> Settings</TabsTrigger>
             <TabsTrigger value="intake" className="gap-2"><Activity className="w-4 h-4"/> Intake</TabsTrigger>
             <TabsTrigger value="meal" className="gap-2"><Utensils className="w-4 h-4"/> Meal Plan</TabsTrigger>
             <TabsTrigger value="groceries" className="gap-2"><ListChecks className="w-4 h-4"/> Groceries</TabsTrigger>
             <TabsTrigger value="workouts" className="gap-2"><Dumbbell className="w-4 h-4"/> Workouts</TabsTrigger>
             <TabsTrigger value="trackers" className="gap-2"><BarChart3 className="w-4 h-4"/> Trackers</TabsTrigger>
-            <TabsTrigger value="explorer" className="gap-2"><FileJson className="w-4 h-4"/> API Explorer</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="settings"><SettingsPanel api={api}/></TabsContent>
           <TabsContent value="intake"><Intake api={api}/></TabsContent>
           <TabsContent value="meal"><MealPlan api={api}/></TabsContent>
           <TabsContent value="groceries"><GroceryList api={api}/></TabsContent>
@@ -673,7 +670,6 @@ export default function App() {
       </main>
 
       <footer className="w-full px-6 py-8 text-center text-xs text-muted-foreground">
-        <div>Tip: Add <code>?api=http://127.0.0.1:8010</code> to the URL to pre‑set the API target.</div>
       </footer>
     </div>
   );
