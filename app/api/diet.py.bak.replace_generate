@@ -731,6 +731,7 @@ def generate_plan(
         if payload.persist:
             for day in day_plans:
                 for m in day.meals:
+                    # Parse time HH:MM into datetime
                     hh, mm = (m.time or "12:00").split(":")[0:2]
                     eaten_at = _dt.combine(_date.fromisoformat(day.date), _time(int(hh), int(mm)))
                     meal_row = Meal(user_id=user.id, name=m.title, eaten_at=eaten_at, total_calories=m.kcal)
@@ -741,21 +742,16 @@ def generate_plan(
                         session.add(mi)
             session.commit()
 
-        # Build response and save plan JSON history
-        resp = {
+        return {
             "window": {"start": start_date.isoformat(), "end": (start_date + _td(days=days-1)).isoformat()},
             "rationalization": rz.dict(),
             "days": [d.dict() for d in day_plans],
             "persisted": bool(payload.persist),
-            "created_at": _dt.utcnow().isoformat(),
         }
-        try:
-            _save_plan(user.id, start_date, resp)
-        except Exception:
-            pass
-        return resp
     finally:
         session.exec(text("RESET app.user_id"))
+
+
 # ---------- Plan History (file-backed per user) ----------
 def _plans_dir(uid: int) -> str:
     d = os.path.join("data", "plans", f"user-{uid}")

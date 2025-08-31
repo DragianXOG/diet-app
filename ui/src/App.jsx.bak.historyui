@@ -241,67 +241,6 @@ function GroceryList({ api }) {
   const isOpen = (i,k) => !!open[keyFor(i,k)];
   const toggle = (i,k) => setOpen(prev => ({ ...prev, [keyFor(i,k)]: !prev[keyFor(i,k)] }));
 
-  // History / plans list
-  const [viewMode, setViewMode] = useState('current'); // 'current' | 'history'
-  const [plans, setPlans] = useState(null); // list from GET /plans
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [selectedStart, setSelectedStart] = useState(null);
-
-  async function loadHistory() {
-    setHistoryLoading(true);
-    try {
-      const list = await api.request("/api/v1/plans");
-      setPlans(list);
-      if (!list || list.length === 0) setStatus("No saved plans yet.");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to load plan history.");
-    } finally {
-      setHistoryLoading(false);
-    }
-  }
-
-  async function openHistory(start) {
-    try {
-      const data = await api.request(`/api/v1/plans/${start}`);
-      setSelectedStart(start);
-      // Normalize to UI plan shape {days:[{day, meals:[{...}]}]}
-      const days = (data.days||[]).map(d => ({
-        day: d.date,
-        meals: d.meals.map(m => ({
-          time: m.time, title: m.title, carbs: m.carbs ?? null, kcal: m.kcal ?? null,
-          ingredients: m.ingredients || [], steps: m.steps || []
-        }))
-      }));
-      setPlan({ week: 1, days, window: data.window });
-      setStatus(`Loaded saved plan (${data.window?.start}..${data.window?.end})`);
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to load saved plan.");
-    }
-  }
-
-  function windowFromPlan(p) {
-    if (!p?.days || p.days.length === 0) return null;
-    if (p.window?.start && p.window?.end) return p.window;
-    const dates = p.days.map(d=>d.day).filter(Boolean).sort();
-    if (dates.length === 0) return null;
-    return { start: dates[0], end: dates[dates.length-1] };
-  }
-
-  async function buildGroceriesForPlan() {
-    const win = windowFromPlan(plan);
-    if (!win) { setStatus("No window for this plan"); return; }
-    try {
-      setStatus(`Building groceries for ${win.start}..${win.end}…`);
-      await api.request(`/api/v1/groceries/sync_from_meals?start=${win.start}&end=${win.end}&persist=true&clear_existing=true&seed_if_empty=false`, { method: "POST" });
-      setStatus("Groceries built for this plan.");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to build groceries for this plan.");
-    }
-  }
-
   useEffect(()=> ls.set("diet.groceries", items), [items]);
 
   function addLocal(item) { setItems(prev => [{ id: Date.now(), purchased: false, ...item }, ...prev]); }
@@ -369,7 +308,7 @@ Proceed anyway?`);
           ingredients: m.ingredients || [], steps: m.steps || []
         }))
       }));
-      setPlan({ week: 1, days, window: resp.window });
+      setPlan({ week: 1, days });
       setStatus("Generated on server");
     } catch (e) {
       console.error(e);
@@ -475,67 +414,6 @@ function AboutYou({ api }) {
   const keyFor = (i,k) => `${i}-${k}`;
   const isOpen = (i,k) => !!open[keyFor(i,k)];
   const toggle = (i,k) => setOpen(prev => ({ ...prev, [keyFor(i,k)]: !prev[keyFor(i,k)] }));
-
-  // History / plans list
-  const [viewMode, setViewMode] = useState('current'); // 'current' | 'history'
-  const [plans, setPlans] = useState(null); // list from GET /plans
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [selectedStart, setSelectedStart] = useState(null);
-
-  async function loadHistory() {
-    setHistoryLoading(true);
-    try {
-      const list = await api.request("/api/v1/plans");
-      setPlans(list);
-      if (!list || list.length === 0) setStatus("No saved plans yet.");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to load plan history.");
-    } finally {
-      setHistoryLoading(false);
-    }
-  }
-
-  async function openHistory(start) {
-    try {
-      const data = await api.request(`/api/v1/plans/${start}`);
-      setSelectedStart(start);
-      // Normalize to UI plan shape {days:[{day, meals:[{...}]}]}
-      const days = (data.days||[]).map(d => ({
-        day: d.date,
-        meals: d.meals.map(m => ({
-          time: m.time, title: m.title, carbs: m.carbs ?? null, kcal: m.kcal ?? null,
-          ingredients: m.ingredients || [], steps: m.steps || []
-        }))
-      }));
-      setPlan({ week: 1, days, window: data.window });
-      setStatus(`Loaded saved plan (${data.window?.start}..${data.window?.end})`);
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to load saved plan.");
-    }
-  }
-
-  function windowFromPlan(p) {
-    if (!p?.days || p.days.length === 0) return null;
-    if (p.window?.start && p.window?.end) return p.window;
-    const dates = p.days.map(d=>d.day).filter(Boolean).sort();
-    if (dates.length === 0) return null;
-    return { start: dates[0], end: dates[dates.length-1] };
-  }
-
-  async function buildGroceriesForPlan() {
-    const win = windowFromPlan(plan);
-    if (!win) { setStatus("No window for this plan"); return; }
-    try {
-      setStatus(`Building groceries for ${win.start}..${win.end}…`);
-      await api.request(`/api/v1/groceries/sync_from_meals?start=${win.start}&end=${win.end}&persist=true&clear_existing=true&seed_if_empty=false`, { method: "POST" });
-      setStatus("Groceries built for this plan.");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to build groceries for this plan.");
-    }
-  }
   const [err, setErr] = useState("");
 
   const [form, setForm] = useState({
@@ -728,67 +606,6 @@ function MealPlan({ api }) {
   const isOpen = (i,k) => !!open[keyFor(i,k)];
   const toggle = (i,k) => setOpen(prev => ({ ...prev, [keyFor(i,k)]: !prev[keyFor(i,k)] }));
 
-  // History / plans list
-  const [viewMode, setViewMode] = useState('current'); // 'current' | 'history'
-  const [plans, setPlans] = useState(null); // list from GET /plans
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [selectedStart, setSelectedStart] = useState(null);
-
-  async function loadHistory() {
-    setHistoryLoading(true);
-    try {
-      const list = await api.request("/api/v1/plans");
-      setPlans(list);
-      if (!list || list.length === 0) setStatus("No saved plans yet.");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to load plan history.");
-    } finally {
-      setHistoryLoading(false);
-    }
-  }
-
-  async function openHistory(start) {
-    try {
-      const data = await api.request(`/api/v1/plans/${start}`);
-      setSelectedStart(start);
-      // Normalize to UI plan shape {days:[{day, meals:[{...}]}]}
-      const days = (data.days||[]).map(d => ({
-        day: d.date,
-        meals: d.meals.map(m => ({
-          time: m.time, title: m.title, carbs: m.carbs ?? null, kcal: m.kcal ?? null,
-          ingredients: m.ingredients || [], steps: m.steps || []
-        }))
-      }));
-      setPlan({ week: 1, days, window: data.window });
-      setStatus(`Loaded saved plan (${data.window?.start}..${data.window?.end})`);
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to load saved plan.");
-    }
-  }
-
-  function windowFromPlan(p) {
-    if (!p?.days || p.days.length === 0) return null;
-    if (p.window?.start && p.window?.end) return p.window;
-    const dates = p.days.map(d=>d.day).filter(Boolean).sort();
-    if (dates.length === 0) return null;
-    return { start: dates[0], end: dates[dates.length-1] };
-  }
-
-  async function buildGroceriesForPlan() {
-    const win = windowFromPlan(plan);
-    if (!win) { setStatus("No window for this plan"); return; }
-    try {
-      setStatus(`Building groceries for ${win.start}..${win.end}…`);
-      await api.request(`/api/v1/groceries/sync_from_meals?start=${win.start}&end=${win.end}&persist=true&clear_existing=true&seed_if_empty=false`, { method: "POST" });
-      setStatus("Groceries built for this plan.");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to build groceries for this plan.");
-    }
-  }
-
   async function buildPlan() {
     setLoading(true); setStatus(""); setPlan(null);
     try {
@@ -830,7 +647,7 @@ function MealPlan({ api }) {
             kcal: m.total_calories ?? null,
           })),
         }));
-        setPlan({ week: 1, days, window: resp.window });
+        setPlan({ week: 1, days });
         setStatus("Loaded meals from API");
       }
     } catch (e) {
@@ -880,7 +697,7 @@ Proceed anyway?`);
           ingredients: m.ingredients || [], steps: m.steps || []
         }))
       }));
-      setPlan({ week: 1, days, window: resp.window });
+      setPlan({ week: 1, days });
       setStatus("Generated on server");
     } catch (e) {
       console.error(e);
@@ -915,105 +732,10 @@ Proceed anyway?`);
 	            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <>✨ </>}
 	            Generate 7\u2011Day Plan
 	          </Button>
-          {plan && <><Button variant="secondary" onClick={exportCsv}><Download className="w-4 h-4 mr-2"/>Export CSV</Button><Button variant="outline" onClick={buildGroceriesForPlan}>🛒 Build Groceries for This Plan</Button></>}
+          {plan && <Button variant="secondary" onClick={exportCsv}><Download className="w-4 h-4 mr-2"/>Export CSV</Button>}
           {status && <Badge variant="secondary">{status}</Badge>}
         </div>
-          <div className="ml-auto flex items-center gap-2">
-            <Button variant={viewMode === 'current' ? 'default' : 'outline'} onClick={() => setViewMode('current')}>
-              Current Week
-            </Button>
-            <Button variant={viewMode === 'history' ? 'default' : 'outline'} onClick={() => { setViewMode('history'); if (!plans) loadHistory(); }}>
-              History
-            </Button>
-          </div>
-    
-        {/* HISTORY PANEL */}
-        {viewMode === 'history' ? (
-          <div className="grid gap-4">
-            <div className="flex items-center gap-3">
-              <Button variant="outline" onClick={loadHistory} disabled={historyLoading}>
-                {historyLoading ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <RefreshCcw className="w-4 h-4 mr-2 text-white"/>}
-                Refresh History
-              </Button>
-              {status && <Badge variant="secondary">{status}</Badge>}
-            </div>
-            <div className="overflow-x-auto rounded-xl border">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="text-left p-3">Start</th>
-                    <th className="text-left p-3">End</th>
-                    <th className="text-left p-3">Diet</th>
-                    <th className="text-left p-3">Meals/day</th>
-                    <th className="text-left p-3">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {Array.isArray(plans) && plans.length>0 ? plans.map((p,i)=>(
-                    <tr key={i} className="border-t">
-                      <td className="p-3">{p.start}</td>
-                      <td className="p-3">{p.end}</td>
-                      <td className="p-3">{p.diet_label || "—"}</td>
-                      <td className="p-3">{p.meals_per_day ?? "—"}</td>
-                      <td className="p-3">
-                        <Button size="sm" variant="ghost" onClick={()=>openHistory(p.start)}>Open</Button>
-                      </td>
-                    </tr>
-                  )) : (
-                    <tr><td className="p-6 text-center text-muted-foreground" colSpan={5}>No saved plans yet.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            {plan ? (
-              <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {plan.days?.map((d, i) => (
-                  <div key={i} className="rounded-xl border p-0">
-                    <div className="p-3">
-                      <div className="text-base font-semibold">{d.day}</div>
-                      <div className="text-xs text-muted-foreground">2 meals</div>
-                    </div>
-                    <div className="grid gap-3 p-3">
-                      {d.meals?.map((m, k) => (
-                        <div key={k} className="rounded-xl border p-3">
-                          <div className="text-xs text-muted-foreground">{m.time}</div>
-                          <div className="font-medium">{m.title}</div>
-                          <div className="text-xs text-muted-foreground">{m.carbs != null && <>Carbs: <b>{m.carbs} g</b></>} {m.kcal != null && <> · {m.kcal} kcal</>}</div>
-                          {m.ingredients && m.ingredients.length > 0 && (
-                            <button className="text-xs underline mt-1" onClick={() => toggle(i,k)}>
-                              {isOpen(i,k) ? "Hide recipe" : "Show recipe"}
-                            </button>
-                          )}
-                          {isOpen(i,k) && (
-                            <div className="mt-2 text-sm">
-                              <div className="font-medium mb-1">Ingredients</div>
-                              <ul className="list-disc pl-5">
-                                {m.ingredients.map((ing, idx) => (
-                                  <li key={idx}>{ing.name}{ing.quantity!=null ? ` — ${ing.quantity}` : ""}{ing.unit ? ` ${ing.unit}` : ""}</li>
-                                ))}
-                              </ul>
-                              {m.steps && m.steps.length>0 && (
-                                <>
-                                  <div className="font-medium mt-3 mb-1">Steps</div>
-                                  <ol className="list-decimal pl-5">
-                                    {m.steps.map((s, idx) => <li key={idx}>{s}</li>)}
-                                  </ol>
-                                </>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <div className="text-muted-foreground text-sm">Select a saved plan to preview.</div>
-            )}
-          </div>
-        ) : (
-        
+        {plan ? (
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
             {plan.days?.map((d, i) => (
               <motion.div key={i} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i*0.03 }}>
@@ -1060,7 +782,6 @@ Proceed anyway?`);
           </div>
         ) : (
           <div className="text-muted-foreground text-sm">Click <em>Build / Refresh</em> to fetch from your API or see a demo.</div>
-        )}
         )}
       </CardContent>
     </Card>
@@ -1115,7 +836,7 @@ Proceed anyway?`);
           ingredients: m.ingredients || [], steps: m.steps || []
         }))
       }));
-      setPlan({ week: 1, days, window: resp.window });
+      setPlan({ week: 1, days });
       setStatus("Generated on server");
     } catch (e) {
       console.error(e);
