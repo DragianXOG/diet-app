@@ -1,5 +1,5 @@
 from sqlalchemy import text
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict
 from datetime import datetime
 from pydantic import BaseModel, conint, confloat
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -115,7 +115,7 @@ def list_groceries(
         if only_open:
             q = q.where(GroceryItem.purchased == False)  # noqa: E712
         rows = session.exec(q.order_by(GroceryItem.created_at.desc())).all()
-        return [{"id": r.id, "name": r.name, "quantity": r.quantity, "unit": r.unit, "purchased": r.purchased, "store": getattr(r, "store", None), "unit_price": getattr(r, "unit_price", None), "total_price": getattr(r, "total_price", None), "created_at": r.created_at.isoformat()} for r in rows]
+        return [{"id": r.id, "name": r.name, "quantity": r.quantity, "unit": r.unit, "purchased": r.purchased, "created_at": r.created_at.isoformat()} for r in rows]
     finally:
         session.exec(text("RESET app.user_id"))
 
@@ -251,6 +251,114 @@ def sync_groceries_from_meals(
     finally:
         session.exec(text("RESET app.user_id"))
 # ---------- Intake (DB-backed with RLS) ----------
+@router.post("/groceries/sync_from_meals")
+def sync_groceries_from_meals(
+    start: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    persist: bool = Query(True),
+    clear_existing: bool = Query(False),
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """
+    Aggregate grocery items from meals in [start, end] (inclusive).
+    Uses real MealItem rows when present; if a meal has no items, falls back to a small
+    default ingredient list based on the meal name to make the demo useful.
+    When persist=true, writes to grocery_items (respecting RLS).
+    """
+    from datetime import datetime as _dt, timedelta as _td, date as _date
+
+    # Helper: parse dates and build datetime window [start_dt, end_excl)
+    today = _dt.utcnow().date()
+    sdate = _date.fromisoformat(start) if start else today
+    edate = _date.fromisoformat(end) if end else (sdate + _td(days=6))
+    start_dt = _dt.combine(sdate, _dt.min.time())
+    end_excl = _dt.combine(edate + _td(days=1), _dt.min.time())
+
+    # Default ingredient fallback by dish name (match on the substring after " - ")
+    fallback = {
+        "Chicken Caesar Bowl": [("Chicken breast", 1.5, "lb"), ("Romaine", 2, "heads"), ("Parmesan", 1, "cup"), ("Caesar dressing", 1, "bottle")],
+        "Salmon & Asparagus": [("Salmon fillets", 4, "pcs"), ("Asparagus", 2, "bunch"), ("Lemon", 2, "pcs")],
+        "Turkey Lettuce Wraps": [("Ground turkey", 1, "lb"), ("Lettuce", 2, "heads"), ("Bell peppers", 2, "pcs")],
+        "Lean Turkey Chili": [("Ground turkey", 2, "lb"), ("Diced tomatoes", 2, "cans"), ("Kidney beans", 2, "cans"), ("Chili seasoning", 1, "packet")],
+        "Tuna Nicoise": [("Canned tuna", 4, "cans"), ("Green beans", 1, "lb"), ("Eggs", 6, "pcs"), ("Olives", 1, "jar")],
+        "Baked Cod & Broccoli": [("Cod fillets", 4, "pcs"), ("Broccoli", 2, "heads"), ("Olive oil", 1, "bottle")],
+        "Greek Chicken Bowl": [("Chicken breast", 1.5, "lb"), ("Cucumber", 2, "pcs"), ("Tomatoes", 4, "pcs"), ("Feta", 1, "block")],
+        "Turkey Meatballs & Veg": [("Ground turkey", 1.5, "lb"), ("Marinara", 1, "jar"), ("Zucchini", 3, "pcs"), ("Parmesan", 1, "cup")],
+        "Beef & Veg Stir-Fry": [("Beef strips", 1.5, "lb"), ("Broccoli", 1, "head"), ("Bell peppers", 2, "pcs"), ("Soy sauce", 1, "bottle")],
+        "Chicken Fajita Bowl": [("Chicken breast", 1.5, "lb"), ("Bell peppers", 3, "pcs"), ("Onions", 2, "pcs"), ("Fajita seasoning", 1, "packet")],
+        "Shrimp & Zoodles": [("Shrimp", 2, "lb"), ("Zucchini", 4, "pcs"), ("Garlic", 1, "bulb")],
+        "Steak & Big Salad": [("Steak", 2, "lb"), ("Mixed greens", 2, "bags"), ("Cherry tomatoes", 2, "pints")],
+        "Egg Roll in a Bowl": [("Ground pork", 1, "lb"), ("Cabbage", 1, "head"), ("Soy sauce", 1, "bottle")],
+        "Garlic Chicken & Veg": [("Chicken thighs", 1.5, "lb"), ("Green beans", 1, "lb"), ("Garlic", 1, "bulb")],
+    }
+
+    # Set RLS context
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        # Pull meals for window
+        meals = session.exec(
+            select(Meal)
+            .where(Meal.user_id == user.id)
+            .where(Meal.eaten_at >= start_dt, Meal.eaten_at < end_excl)
+            .order_by(Meal.eaten_at.asc())
+        ).all()
+
+        meal_ids = [m.id for m in meals] if meals else []
+        items_by_meal = {}
+        if meal_ids:
+            mis = session.exec(select(MealItem).where(MealItem.meal_id.in_(meal_ids))).all()
+            for it in mis:
+                items_by_meal.setdefault(it.meal_id, []).append(it)
+
+        # Aggregate { (name, unit) -> qty }
+        agg = {}
+        def add(name, qty, unit):
+            key = (name.strip(), (unit or "").strip())
+            agg[key] = agg.get(key, 0.0) + float(qty if qty is not None else 1.0)
+
+        for m in meals:
+            real_items = items_by_meal.get(m.id, [])
+            if real_items:
+                for it in real_items:
+                    add(it.name, it.quantity if it.quantity is not None else 1.0, it.unit)
+            else:
+                # derive dish name
+                dish = m.name.split(" - ", 1)[-1]
+                if dish in fallback:
+                    for (n, q, u) in fallback[dish]:
+                        add(n, q, u)
+
+        out = [{"name": k[0], "quantity": round(v, 2), "unit": (k[1] or None)} for k, v in sorted(agg.items(), key=lambda x: x[0][0].lower())]
+
+        if persist and out:
+            if clear_existing:
+                # Clear current unpurchased rows for this user to avoid duplicates
+                session.exec(text("DELETE FROM grocery_items WHERE user_id = :uid AND (purchased IS NULL OR purchased = false)").bindparams(uid=user.id))
+            for row in out:
+                gi = GroceryItem(user_id=user.id, name=row["name"], quantity=row["quantity"], unit=row["unit"], purchased=False)
+                session.add(gi)
+            session.commit()
+
+        return {"window": {"start": sdate.isoformat(), "end": edate.isoformat()}, "count": len(out), "items": out}
+    finally:
+        session.exec(text("RESET app.user_id"))
+
+# ---------- Intake (DB-backed with RLS) ----------
+class IntakeIn(BaseModel):
+    food_notes: Optional[str] = None
+    workout_notes: Optional[str] = None
+    name: Optional[str] = None
+    age: Optional[int] = None
+    sex: Optional[str] = None
+    height_in: Optional[int] = None
+    weight_lb: Optional[int] = None
+    diabetic: Optional[bool] = None
+    conditions: Optional[str] = None
+    meds: Optional[str] = None
+    goals: Optional[str] = None
+    zip: Optional[str] = None
+    gym: Optional[str] = None
 
 @router.get("/intake")
 def get_intake(
@@ -704,146 +812,3 @@ def get_plan(
     with open(fp, "r", encoding="utf-8") as f:
         data = json.load(f)
     return data
-
-
-# ---------- Grocery pricing & store assignment ----------
-def _normalize_item(name: str) -> str:
-    n = (name or "").strip().lower()
-    repl = {
-        "chicken breast":"chicken breast","chicken thighs":"chicken thighs","romaine":"romaine","parmesan":"parmesan",
-        "caesar dressing":"caesar dressing","salmon":"salmon","salmon fillets":"salmon",
-        "asparagus":"asparagus","lemon":"lemon","ground turkey":"ground turkey","lettuce":"lettuce",
-        "bell peppers":"bell pepper","bell pepper":"bell pepper","diced tomatoes":"diced tomatoes",
-        "kidney beans":"kidney beans","chili seasoning":"chili seasoning","canned tuna":"tuna","tuna":"tuna",
-        "green beans":"green beans","eggs":"eggs","olives":"olives","cod":"cod","cod fillets":"cod",
-        "broccoli":"broccoli","olive oil":"olive oil","cucumber":"cucumber","tomatoes":"tomato","tomato":"tomato",
-        "feta":"feta","marinara":"marinara","zucchini":"zucchini","beef strips":"beef","beef":"beef",
-        "onions":"onion","onion":"onion","fajita seasoning":"fajita seasoning","shrimp":"shrimp",
-        "steak":"steak","mixed greens":"mixed greens","cherry tomatoes":"cherry tomato","cabbage":"cabbage",
-        "soy sauce":"soy sauce","garlic":"garlic","greek yogurt":"greek yogurt","walnuts":"walnuts",
-        "berries":"berries","cauli rice":"cauli rice","cheddar":"cheddar","coleslaw mix":"coleslaw mix",
-        "mayo":"mayo","mixed veg":"mixed veg","vinaigrette":"vinaigrette","unsweetened almond milk":"almond milk",
-        "whey isolate":"whey isolate","spinach":"spinach","ground beef patty":"ground beef"
-    }
-    # try exact keys first, else collapse plurals
-    for k,v in repl.items():
-        if k in n: return v
-    if n.endswith("s"): n = n[:-1]
-    return n
-
-# Simple local price catalog (USD per unit)
-_PRICE_CATALOG = {
-    "ALDI": {
-        "eggs": 0.25, "romaine": 1.49, "parmesan": 4.50, "caesar dressing": 2.49, "chicken breast": 3.49,
-        "salmon": 9.99, "asparagus": 2.49, "lemon": 0.69, "ground turkey": 3.29, "lettuce": 1.49,
-        "bell pepper": 0.89, "diced tomatoes": 0.95, "kidney beans": 0.85, "chili seasoning": 0.49,
-        "tuna": 0.89, "green beans": 1.29, "olives": 2.29, "cod": 6.99, "broccoli": 1.69, "olive oil": 5.99,
-        "cucumber": 0.69, "tomato": 0.39, "feta": 2.49, "marinara": 1.79, "zucchini": 0.79, "beef": 5.49,
-        "onion": 0.69, "fajita seasoning": 0.49, "shrimp": 6.99, "steak": 8.99, "mixed greens": 2.49,
-        "cherry tomato": 2.29, "cabbage": 1.49, "soy sauce": 1.19, "garlic": 0.39, "greek yogurt": 0.89,
-        "walnuts": 0.89, "berries": 2.49, "cauli rice": 2.49, "cheddar": 2.49, "coleslaw mix": 1.49,
-        "mayo": 2.49, "mixed veg": 2.49, "vinaigrette": 2.49, "almond milk": 2.29, "whey isolate": 0.90, "spinach": 1.49,
-        "chicken thighs": 2.29, "ground beef": 4.29
-    },
-    "WALMART": {
-        "eggs": 0.28, "romaine": 1.98, "parmesan": 4.98, "caesar dressing": 2.98, "chicken breast": 3.29,
-        "salmon": 10.49, "asparagus": 2.68, "lemon": 0.78, "ground turkey": 3.49, "lettuce": 1.78,
-        "bell pepper": 0.98, "diced tomatoes": 1.08, "kidney beans": 0.92, "chili seasoning": 0.58,
-        "tuna": 0.92, "green beans": 1.49, "olives": 2.68, "cod": 7.29, "broccoli": 1.89, "olive oil": 6.49,
-        "cucumber": 0.78, "tomato": 0.48, "feta": 2.78, "marinara": 1.98, "zucchini": 0.88, "beef": 5.19,
-        "onion": 0.78, "fajita seasoning": 0.58, "shrimp": 7.49, "steak": 9.49, "mixed greens": 2.78,
-        "cherry tomato": 2.49, "cabbage": 1.68, "soy sauce": 1.29, "garlic": 0.48, "greek yogurt": 0.98,
-        "walnuts": 0.98, "berries": 2.78, "cauli rice": 2.68, "cheddar": 2.68, "coleslaw mix": 1.78,
-        "mayo": 2.98, "mixed veg": 2.68, "vinaigrette": 2.98, "almond milk": 2.49, "whey isolate": 1.10, "spinach": 1.78,
-        "chicken thighs": 2.19, "ground beef": 4.09
-    },
-    "COSTCO": {
-        "eggs": 0.22, "romaine": 1.39, "parmesan": 4.20, "caesar dressing": 2.39, "chicken breast": 3.19,
-        "salmon": 9.49, "asparagus": 2.29, "lemon": 0.55, "ground turkey": 3.09, "lettuce": 1.29,
-        "bell pepper": 0.85, "diced tomatoes": 0.89, "kidney beans": 0.79, "chili seasoning": 0.45,
-        "tuna": 0.85, "green beans": 1.09, "olives": 2.09, "cod": 6.69, "broccoli": 1.49, "olive oil": 5.49,
-        "cucumber": 0.59, "tomato": 0.35, "feta": 2.19, "marinara": 1.59, "zucchini": 0.69, "beef": 4.89,
-        "onion": 0.59, "fajita seasoning": 0.39, "shrimp": 6.49, "steak": 8.49, "mixed greens": 2.19,
-        "cherry tomato": 2.09, "cabbage": 1.29, "soy sauce": 1.09, "garlic": 0.29, "greek yogurt": 0.79,
-        "walnuts": 0.79, "berries": 2.19, "cauli rice": 2.19, "cheddar": 2.19, "coleslaw mix": 1.29,
-        "mayo": 2.19, "mixed veg": 2.19, "vinaigrette": 2.19, "almond milk": 2.09, "whey isolate": 0.80, "spinach": 1.29,
-        "chicken thighs": 1.99, "ground beef": 3.89
-    },
-}
-
-def _pick_store(item_name: str, prefer: Optional[str]) -> Tuple[str, Optional[float]]:
-    norm = _normalize_item(item_name)
-    candidates = []
-    for store, table in _PRICE_CATALOG.items():
-        price = table.get(norm)
-        if price is not None:
-            # slight preference boost for 'prefer' store
-            adj = price * (0.98 if prefer and store == prefer.upper() else 1.0)
-            candidates.append((store, price, adj))
-    if not candidates:
-        # default to preferred store if provided, else ALDI
-        return (prefer.upper() if prefer else "ALDI", None)
-    # choose by adjusted price (then real price)
-    candidates.sort(key=lambda t: (t[2], t[1]))
-    return (candidates[0][0], candidates[0][1])
-
-class PriceAssignOut(BaseModel):
-    items_priced: int
-    store_totals: Dict[str, float]
-    grand_total: float
-
-@router.post("/groceries/price_assign")
-def price_assign(
-    prefer: Optional[str] = Query(None, description="Preferred store name like ALDI/WALMART/COSTCO; if absent, inferred from intake notes."),
-    persist: bool = Query(True),
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-):
-    """
-    Assign a store and prices to current (unpurchased) grocery_items for the user.
-    Uses a local price catalog and infers preferred store from intake notes (e.g., 'shop at Aldi').
-    Updates grocery_items.store, unit_price, total_price when persist=true.
-    Returns totals by store and a grand total.
-    """
-    # Set RLS
-    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
-    try:
-        # infer preferred store from intake
-        if not prefer:
-            intake = session.exec(
-                select(Intake).where(Intake.user_id == user.id).order_by(Intake.id.desc()).limit(1)
-            ).first()
-            if intake:
-                notes = ((intake.food_notes or "") + " " + (intake.goals or "")).lower()
-                if "aldi" in notes: prefer = "ALDI"
-                elif "walmart" in notes: prefer = "WALMART"
-                elif "costco" in notes: prefer = "COSTCO"
-
-        rows = session.exec(
-            select(GroceryItem).where(GroceryItem.user_id == user.id).where((GroceryItem.purchased == False) | (GroceryItem.purchased == None)).order_by(GroceryItem.created_at.asc())
-        ).all()
-        store_totals = {}
-        items_priced = 0
-
-        for r in rows:
-            store, unit = _pick_store(r.name, prefer)
-            qty = float(r.quantity) if r.quantity is not None else 1.0
-            total = (unit * qty) if unit is not None else None
-            if persist:
-                r.store = store
-                r.unit_price = unit
-                r.total_price = total
-                session.add(r)
-            if total is not None:
-                store_totals[store] = store_totals.get(store, 0.0) + float(total)
-                items_priced += 1
-
-        if persist:
-            session.commit()
-
-        grand = sum(store_totals.values()) if store_totals else 0.0
-        # Round to 2 decimals for output
-        store_totals = {k: round(v, 2) for k,v in store_totals.items()}
-        return {"items_priced": items_priced, "store_totals": store_totals, "grand_total": round(grand, 2)}
-    finally:
-        session.exec(text("RESET app.user_id"))
