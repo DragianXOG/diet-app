@@ -272,61 +272,6 @@ function GroceryList({ api }) {
     catch {}
   }
 
-
-  async function generatePlan() {
-    setLoading(true);
-    setStatus("Generating 7\u2011day plan on server...");
-    try {
-      // Simple 2‑meals/day template for the next 7 days
-      const midday = [
-        { title: "Egg scramble", carbs: 6, kcal: 420 },
-        { title: "Greek yogurt + walnuts", carbs: 9, kcal: 380 },
-        { title: "Tuna avocado boats", carbs: 5, kcal: 430 },
-        { title: "Protein shake", carbs: 7, kcal: 350 },
-        { title: "Cottage cheese bowl", carbs: 8, kcal: 360 },
-        { title: "Chicken Caesar salad", carbs: 10, kcal: 480 },
-        { title: "Omelet + spinach", carbs: 7, kcal: 410 },
-      ];
-      const dinner = [
-        { title: "Grilled chicken + salad", carbs: 10, kcal: 520 },
-        { title: "Beef stir-fry (cauli rice)", carbs: 11, kcal: 560 },
-        { title: "Turkey lettuce tacos", carbs: 12, kcal: 540 },
-        { title: "Pork chops + green beans", carbs: 9, kcal: 570 },
-        { title: "Salmon + asparagus", carbs: 6, kcal: 550 },
-        { title: "Burger (no bun) + slaw", carbs: 14, kcal: 590 },
-        { title: "Roast chicken + veg", carbs: 12, kcal: 560 },
-      ];
-      const mkIso = (d, hh, mm=0) => {
-        const y = d.getFullYear();
-        const m = String(d.getMonth()+1).padStart(2,'0');
-        const day = String(d.getDate()).padStart(2,'0');
-        const H = String(hh).padStart(2,'0');
-        const M = String(mm).padStart(2,'0');
-        return `${y}-${m}-${day}T${H}:${M}:00Z`;
-      };
-      const start = new Date();
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(start.getTime() + i*24*60*60*1000);
-        const a = midday[i % midday.length];
-        const b = dinner[i % dinner.length];
-        // Midday
-        await api.request("/api/v1/meals", {
-          method: "POST",
-          body: { name: a.title, eaten_at: mkIso(d, 12, 0), total_calories: a.kcal, total_carbs: a.carbs }
-        });
-        // Evening
-        await api.request("/api/v1/meals", {
-          method: "POST",
-          body: { name: b.title, eaten_at: mkIso(d, 18, 0), total_calories: b.kcal, total_carbs: b.carbs }
-        });
-      }
-      setStatus("Generated 7\u2011day plan. Refreshing…");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to generate meal plan.");
-    }
-    await buildPlan(); // reload from server (handles fallback/demo)
-  }
   function exportCsv() {
     const headers = ["id","name","quantity","unit","purchased","created_at"]; 
     const rows = items.map(x=> headers.map(h=> JSON.stringify(x[h]??""))).join("\n");
@@ -665,61 +610,6 @@ function MealPlan({ api }) {
     }
   }
 
-
-  async function generatePlan() {
-    setLoading(true);
-    setStatus("Generating 7\u2011day plan on server...");
-    try {
-      // Simple 2‑meals/day template for the next 7 days
-      const midday = [
-        { title: "Egg scramble", carbs: 6, kcal: 420 },
-        { title: "Greek yogurt + walnuts", carbs: 9, kcal: 380 },
-        { title: "Tuna avocado boats", carbs: 5, kcal: 430 },
-        { title: "Protein shake", carbs: 7, kcal: 350 },
-        { title: "Cottage cheese bowl", carbs: 8, kcal: 360 },
-        { title: "Chicken Caesar salad", carbs: 10, kcal: 480 },
-        { title: "Omelet + spinach", carbs: 7, kcal: 410 },
-      ];
-      const dinner = [
-        { title: "Grilled chicken + salad", carbs: 10, kcal: 520 },
-        { title: "Beef stir-fry (cauli rice)", carbs: 11, kcal: 560 },
-        { title: "Turkey lettuce tacos", carbs: 12, kcal: 540 },
-        { title: "Pork chops + green beans", carbs: 9, kcal: 570 },
-        { title: "Salmon + asparagus", carbs: 6, kcal: 550 },
-        { title: "Burger (no bun) + slaw", carbs: 14, kcal: 590 },
-        { title: "Roast chicken + veg", carbs: 12, kcal: 560 },
-      ];
-      const mkIso = (d, hh, mm=0) => {
-        const y = d.getFullYear();
-        const m = String(d.getMonth()+1).padStart(2,'0');
-        const day = String(d.getDate()).padStart(2,'0');
-        const H = String(hh).padStart(2,'0');
-        const M = String(mm).padStart(2,'0');
-        return `${y}-${m}-${day}T${H}:${M}:00Z`;
-      };
-      const start = new Date();
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(start.getTime() + i*24*60*60*1000);
-        const a = midday[i % midday.length];
-        const b = dinner[i % dinner.length];
-        // Midday
-        await api.request("/api/v1/meals", {
-          method: "POST",
-          body: { name: a.title, eaten_at: mkIso(d, 12, 0), total_calories: a.kcal, total_carbs: a.carbs }
-        });
-        // Evening
-        await api.request("/api/v1/meals", {
-          method: "POST",
-          body: { name: b.title, eaten_at: mkIso(d, 18, 0), total_calories: b.kcal, total_carbs: b.carbs }
-        });
-      }
-      setStatus("Generated 7\u2011day plan. Refreshing…");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to generate meal plan.");
-    }
-    await buildPlan(); // reload from server (handles fallback/demo)
-  }
   function exportCsv() {
     if (!plan?.days) return;
     const rows = [["day","time","title","carbs","kcal"]].concat(
@@ -741,10 +631,6 @@ function MealPlan({ api }) {
             {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <RefreshCcw className="w-4 h-4 mr-2 text-white"/>}
             Build / Refresh
           </Button>
-	          <Button onClick={generatePlan} disabled={loading}>
-	            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <>✨ </>}
-	            Generate 7\u2011Day Plan
-	          </Button>
           {plan && <Button variant="secondary" onClick={exportCsv}><Download className="w-4 h-4 mr-2"/>Export CSV</Button>}
           {status && <Badge variant="secondary">{status}</Badge>}
         </div>
@@ -795,61 +681,6 @@ function Trackers() {
   const weightData = entries.filter(e=> e.weight != null);
   const glucoseData = entries.filter(e=> e.glucose != null);
 
-
-  async function generatePlan() {
-    setLoading(true);
-    setStatus("Generating 7\u2011day plan on server...");
-    try {
-      // Simple 2‑meals/day template for the next 7 days
-      const midday = [
-        { title: "Egg scramble", carbs: 6, kcal: 420 },
-        { title: "Greek yogurt + walnuts", carbs: 9, kcal: 380 },
-        { title: "Tuna avocado boats", carbs: 5, kcal: 430 },
-        { title: "Protein shake", carbs: 7, kcal: 350 },
-        { title: "Cottage cheese bowl", carbs: 8, kcal: 360 },
-        { title: "Chicken Caesar salad", carbs: 10, kcal: 480 },
-        { title: "Omelet + spinach", carbs: 7, kcal: 410 },
-      ];
-      const dinner = [
-        { title: "Grilled chicken + salad", carbs: 10, kcal: 520 },
-        { title: "Beef stir-fry (cauli rice)", carbs: 11, kcal: 560 },
-        { title: "Turkey lettuce tacos", carbs: 12, kcal: 540 },
-        { title: "Pork chops + green beans", carbs: 9, kcal: 570 },
-        { title: "Salmon + asparagus", carbs: 6, kcal: 550 },
-        { title: "Burger (no bun) + slaw", carbs: 14, kcal: 590 },
-        { title: "Roast chicken + veg", carbs: 12, kcal: 560 },
-      ];
-      const mkIso = (d, hh, mm=0) => {
-        const y = d.getFullYear();
-        const m = String(d.getMonth()+1).padStart(2,'0');
-        const day = String(d.getDate()).padStart(2,'0');
-        const H = String(hh).padStart(2,'0');
-        const M = String(mm).padStart(2,'0');
-        return `${y}-${m}-${day}T${H}:${M}:00Z`;
-      };
-      const start = new Date();
-      for (let i = 0; i < 7; i++) {
-        const d = new Date(start.getTime() + i*24*60*60*1000);
-        const a = midday[i % midday.length];
-        const b = dinner[i % dinner.length];
-        // Midday
-        await api.request("/api/v1/meals", {
-          method: "POST",
-          body: { name: a.title, eaten_at: mkIso(d, 12, 0), total_calories: a.kcal, total_carbs: a.carbs }
-        });
-        // Evening
-        await api.request("/api/v1/meals", {
-          method: "POST",
-          body: { name: b.title, eaten_at: mkIso(d, 18, 0), total_calories: b.kcal, total_carbs: b.carbs }
-        });
-      }
-      setStatus("Generated 7\u2011day plan. Refreshing…");
-    } catch (e) {
-      console.error(e);
-      setStatus("Failed to generate meal plan.");
-    }
-    await buildPlan(); // reload from server (handles fallback/demo)
-  }
   function exportCsv() {
     const headers = ["date","weight","glucose"]; 
     const rows = entries.map(x=> headers.map(h=> JSON.stringify(x[h]??""))).join("\n");
