@@ -1,3 +1,4 @@
+from sqlalchemy import text
 from typing import List, Optional, Dict
 from datetime import datetime
 from pydantic import BaseModel, conint, confloat
@@ -6,7 +7,7 @@ from sqlmodel import Session, select
 
 from ..core.db import get_session
 from ..core.security import get_current_user
-from ..models import User, Meal, MealItem, GroceryItem
+from ..models import User, Meal, MealItem, GroceryItem, Intake
 
 router = APIRouter()
 
@@ -24,51 +25,60 @@ class MealCreate(BaseModel):
 
 @router.post("/meals", status_code=201)
 def create_meal(payload: MealCreate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
-    meal = Meal(
-        user_id=user.id,
-        name=payload.name,
-        eaten_at=payload.eaten_at or datetime.utcnow(),
-        total_calories=(sum(i.calories or 0 for i in payload.items) if payload.items else None),
-    )
-    session.add(meal)
-    session.commit()
-    session.refresh(meal)
+    # Set RLS context for this transaction
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        meal = Meal(
+            user_id=user.id,
+            name=payload.name,
+            eaten_at=payload.eaten_at or datetime.utcnow(),
+            total_calories=(sum(i.calories or 0 for i in payload.items) if payload.items else None),
+        )
+        session.add(meal)
+        session.flush()  # get meal.id before adding items
 
-    for it in payload.items:
-        mi = MealItem(meal_id=meal.id, name=it.name, calories=it.calories, quantity=it.quantity, unit=it.unit)
-        session.add(mi)
-    session.commit()
+        for it in payload.items:
+            mi = MealItem(meal_id=meal.id, name=it.name, calories=it.calories, quantity=it.quantity, unit=it.unit)
+            session.add(mi)
 
-    return {"id": meal.id, "name": meal.name, "eaten_at": meal.eaten_at.isoformat(), "total_calories": meal.total_calories, "items": len(payload.items)}
-
+        session.commit()
+        return {"id": meal.id, "name": meal.name, "eaten_at": meal.eaten_at.isoformat(), "total_calories": meal.total_calories, "items": len(payload.items)}
+    finally:
+        session.exec(text("RESET app.user_id"))
 @router.get("/meals")
 def list_meals(
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
-    limit: int = Query(10, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=100),
 ):
-    meals = session.exec(
-        select(Meal).where(Meal.user_id == user.id).order_by(Meal.eaten_at.desc()).limit(limit)
-    ).all()
-    if not meals:
-        return []
-    meal_ids = [m.id for m in meals]
-    items = session.exec(select(MealItem).where(MealItem.meal_id.in_(meal_ids))).all()
-    by_meal: Dict[int, List[MealItem]] = {}
-    for it in items:
-        by_meal.setdefault(it.meal_id, []).append(it)
-    out = []
-    for m in meals:
-        out.append({
-            "id": m.id,
-            "name": m.name,
-            "eaten_at": m.eaten_at.isoformat(),
-            "total_calories": m.total_calories,
-            "items": [{"name": it.name, "calories": it.calories, "qty": it.quantity, "unit": it.unit} for it in by_meal.get(m.id, [])]
-        })
-    return out
+    # Set RLS context for this transaction so SELECT can see only this user's rows
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        meals = session.exec(
+            select(Meal).where(Meal.user_id == user.id).order_by(Meal.eaten_at.desc()).limit(limit)
+        ).all()
 
-# ---------- Groceries ----------
+        by_meal = {}
+        if meals:
+            meal_ids = [m.id for m in meals]
+            items = session.exec(select(MealItem).where(MealItem.meal_id.in_(meal_ids))).all()
+            for it in items:
+                by_meal.setdefault(it.meal_id, []).append(it)
+
+        out = []
+        for m in meals:
+            out.append({
+                "id": m.id,
+                "name": m.name,
+                "eaten_at": m.eaten_at.isoformat(),
+                "total_calories": m.total_calories,
+                "items": [{"name": it.name, "calories": it.calories, "qty": it.quantity, "unit": it.unit} for it in by_meal.get(m.id, [])]
+            })
+        return out
+    finally:
+        session.exec(text("RESET app.user_id"))
+
+# ---------- Groceries ----------# ---------- Groceries ----------
 class GroceryIn(BaseModel):
     name: str
     quantity: Optional[confloat(ge=0)] = None
@@ -79,11 +89,15 @@ class GroceryUpdate(BaseModel):
 
 @router.post("/groceries", status_code=201)
 def add_grocery(payload: GroceryIn, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
-    g = GroceryItem(user_id=user.id, name=payload.name, quantity=payload.quantity, unit=payload.unit, purchased=False)
-    session.add(g)
-    session.commit()
-    session.refresh(g)
-    return {"id": g.id, "name": g.name, "quantity": g.quantity, "unit": g.unit, "purchased": g.purchased}
+    # Set RLS context
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        g = GroceryItem(user_id=user.id, name=payload.name, quantity=payload.quantity, unit=payload.unit, purchased=False)
+        session.add(g)
+        session.commit()
+        return {"id": g.id, "name": g.name, "quantity": g.quantity, "unit": g.unit, "purchased": g.purchased}
+    finally:
+        session.exec(text("RESET app.user_id"))
 
 @router.get("/groceries")
 def list_groceries(
@@ -91,19 +105,347 @@ def list_groceries(
     session: Session = Depends(get_session),
     only_open: bool = Query(True),
 ):
-    q = select(GroceryItem).where(GroceryItem.user_id == user.id)
-    if only_open:
-        q = q.where(GroceryItem.purchased == False)  # noqa: E712
-    rows = session.exec(q.order_by(GroceryItem.created_at.desc())).all()
-    return [{"id": r.id, "name": r.name, "quantity": r.quantity, "unit": r.unit, "purchased": r.purchased, "created_at": r.created_at.isoformat()} for r in rows]
+    # Set RLS context
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        q = select(GroceryItem).where(GroceryItem.user_id == user.id)
+        if only_open:
+            q = q.where(GroceryItem.purchased == False)  # noqa: E712
+        rows = session.exec(q.order_by(GroceryItem.created_at.desc())).all()
+        return [{"id": r.id, "name": r.name, "quantity": r.quantity, "unit": r.unit, "purchased": r.purchased, "created_at": r.created_at.isoformat()} for r in rows]
+    finally:
+        session.exec(text("RESET app.user_id"))
 
 @router.patch("/groceries/{item_id}")
 def update_grocery(item_id: int, payload: GroceryUpdate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):
-    g = session.get(GroceryItem, item_id)
-    if not g or g.user_id != user.id:
-        raise HTTPException(status_code=404, detail="Item not found")
-    g.purchased = payload.purchased
-    session.add(g)
-    session.commit()
-    session.refresh(g)
-    return {"id": g.id, "name": g.name, "purchased": g.purchased}
+    # Set RLS context
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        g = session.get(GroceryItem, item_id)
+        if not g or g.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Item not found")
+        g.purchased = payload.purchased
+        session.add(g)
+        session.commit()
+        return {"id": g.id, "name": g.name, "purchased": g.purchased}
+    finally:
+        session.exec(text("RESET app.user_id"))
+
+
+
+@router.post("/groceries/sync_from_meals")
+def sync_groceries_from_meals(
+    start: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    persist: bool = Query(True),
+    clear_existing: bool = Query(False),
+    seed_if_empty: bool = Query(True, description="If no meals exist in window, use a default 7-day, 2-meals/day plan and (when persist) seed meals."),
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """
+    Aggregate grocery items from meals in [start, end] (inclusive).
+    - Uses real MealItem rows when present.
+    - If a meal has no items, falls back to default ingredients by dish name.
+    - If there are no meals at all in the window and seed_if_empty=True, it uses
+      a default 7-day, 2-meals/day schedule and (if persist) seeds Meal rows.
+    When persist=true, writes to grocery_items (respecting RLS).
+    """
+    from datetime import datetime as _dt, timedelta as _td, date as _date, time as _time
+
+    # Window [start_dt, end_excl)
+    today = _dt.utcnow().date()
+    sdate = _date.fromisoformat(start) if start else today
+    edate = _date.fromisoformat(end) if end else (sdate + _td(days=6))
+    start_dt = _dt.combine(sdate, _time(0,0))
+    end_excl = _dt.combine(edate + _td(days=1), _time(0,0))
+
+    # Default ingredient fallback by dish name
+    fallback = {
+        "Chicken Caesar Bowl": [("Chicken breast", 1.5, "lb"), ("Romaine", 2, "heads"), ("Parmesan", 1, "cup"), ("Caesar dressing", 1, "bottle")],
+        "Salmon & Asparagus": [("Salmon fillets", 4, "pcs"), ("Asparagus", 2, "bunch"), ("Lemon", 2, "pcs")],
+        "Turkey Lettuce Wraps": [("Ground turkey", 1, "lb"), ("Lettuce", 2, "heads"), ("Bell peppers", 2, "pcs")],
+        "Lean Turkey Chili": [("Ground turkey", 2, "lb"), ("Diced tomatoes", 2, "cans"), ("Kidney beans", 2, "cans"), ("Chili seasoning", 1, "packet")],
+        "Tuna Nicoise": [("Canned tuna", 4, "cans"), ("Green beans", 1, "lb"), ("Eggs", 6, "pcs"), ("Olives", 1, "jar")],
+        "Baked Cod & Broccoli": [("Cod fillets", 4, "pcs"), ("Broccoli", 2, "heads"), ("Olive oil", 1, "bottle")],
+        "Greek Chicken Bowl": [("Chicken breast", 1.5, "lb"), ("Cucumber", 2, "pcs"), ("Tomatoes", 4, "pcs"), ("Feta", 1, "block")],
+        "Turkey Meatballs & Veg": [("Ground turkey", 1.5, "lb"), ("Marinara", 1, "jar"), ("Zucchini", 3, "pcs"), ("Parmesan", 1, "cup")],
+        "Beef & Veg Stir-Fry": [("Beef strips", 1.5, "lb"), ("Broccoli", 1, "head"), ("Bell peppers", 2, "pcs"), ("Soy sauce", 1, "bottle")],
+        "Chicken Fajita Bowl": [("Chicken breast", 1.5, "lb"), ("Bell peppers", 3, "pcs"), ("Onions", 2, "pcs"), ("Fajita seasoning", 1, "packet")],
+        "Shrimp & Zoodles": [("Shrimp", 2, "lb"), ("Zucchini", 4, "pcs"), ("Garlic", 1, "bulb")],
+        "Steak & Big Salad": [("Steak", 2, "lb"), ("Mixed greens", 2, "bags"), ("Cherry tomatoes", 2, "pints")],
+        "Egg Roll in a Bowl": [("Ground pork", 1, "lb"), ("Cabbage", 1, "head"), ("Soy sauce", 1, "bottle")],
+        "Garlic Chicken & Veg": [("Chicken thighs", 1.5, "lb"), ("Green beans", 1, "lb"), ("Garlic", 1, "bulb")],
+    }
+    default_meals1 = ["Chicken Caesar Bowl","Turkey Lettuce Wraps","Tuna Nicoise","Greek Chicken Bowl","Beef & Veg Stir-Fry","Shrimp & Zoodles","Egg Roll in a Bowl"]
+    default_meals2 = ["Salmon & Asparagus","Lean Turkey Chili","Baked Cod & Broccoli","Turkey Meatballs & Veg","Chicken Fajita Bowl","Steak & Big Salad","Garlic Chicken & Veg"]
+
+    # Set RLS context
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        meals = session.exec(
+            select(Meal)
+            .where(Meal.user_id == user.id)
+            .where(Meal.eaten_at >= start_dt, Meal.eaten_at < end_excl)
+            .order_by(Meal.eaten_at.asc())
+        ).all()
+
+        agg = {}
+        def add(name, qty, unit):
+            key = (name.strip(), (unit or "").strip())
+            agg[key] = agg.get(key, 0.0) + float(qty if qty is not None else 1.0)
+
+        if not meals and seed_if_empty:
+            days = (edate - sdate).days + 1
+            schedule = []
+            for i in range(days):
+                day = sdate + _td(days=i)
+                d1 = default_meals1[i % len(default_meals1)]
+                d2 = default_meals2[i % len(default_meals2)]
+                schedule.append((day, d1, d2))
+
+            # Seed meal rows (for UI visibility) and aggregate fallback groceries
+            if persist:
+                for day, d1, d2 in schedule:
+                    session.add(Meal(user_id=user.id, name=f"Meal 1 - {d1}", eaten_at=_dt.combine(day, _time(12,30))))
+                    session.add(Meal(user_id=user.id, name=f"Meal 2 - {d2}", eaten_at=_dt.combine(day, _time(18,30))))
+                session.flush()
+
+            for _, d1, d2 in schedule:
+                for dish in (d1, d2):
+                    for (n,q,u) in fallback.get(dish, []):
+                        add(n,q,u)
+
+        else:
+            # Use real items when present; otherwise fallback by dish name
+            meal_ids = [m.id for m in meals] if meals else []
+            items_by_meal = {}
+            if meal_ids:
+                mis = session.exec(select(MealItem).where(MealItem.meal_id.in_(meal_ids))).all()
+                for it in mis:
+                    items_by_meal.setdefault(it.meal_id, []).append(it)
+
+            for m in meals:
+                real_items = items_by_meal.get(m.id, [])
+                if real_items:
+                    for it in real_items:
+                        add(it.name, it.quantity if it.quantity is not None else 1.0, it.unit)
+                else:
+                    dish = m.name.split(" - ", 1)[-1]
+                    for (n,q,u) in fallback.get(dish, []):
+                        add(n,q,u)
+
+        out = [{"name": k[0], "quantity": round(v, 2), "unit": (k[1] or None)} for k, v in sorted(agg.items(), key=lambda x: x[0][0].lower())]
+
+        if persist and out:
+            if clear_existing:
+                session.exec(text("DELETE FROM grocery_items WHERE user_id = :uid AND (purchased IS NULL OR purchased = false)").bindparams(uid=user.id))
+            for row in out:
+                session.add(GroceryItem(user_id=user.id, name=row["name"], quantity=row["quantity"], unit=row["unit"], purchased=False))
+            session.commit()
+
+        return {"window": {"start": sdate.isoformat(), "end": edate.isoformat()}, "count": len(out), "items": out}
+    finally:
+        session.exec(text("RESET app.user_id"))
+# ---------- Intake (DB-backed with RLS) ----------
+@router.post("/groceries/sync_from_meals")
+def sync_groceries_from_meals(
+    start: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    end: Optional[str] = Query(None, description="YYYY-MM-DD"),
+    persist: bool = Query(True),
+    clear_existing: bool = Query(False),
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """
+    Aggregate grocery items from meals in [start, end] (inclusive).
+    Uses real MealItem rows when present; if a meal has no items, falls back to a small
+    default ingredient list based on the meal name to make the demo useful.
+    When persist=true, writes to grocery_items (respecting RLS).
+    """
+    from datetime import datetime as _dt, timedelta as _td, date as _date
+
+    # Helper: parse dates and build datetime window [start_dt, end_excl)
+    today = _dt.utcnow().date()
+    sdate = _date.fromisoformat(start) if start else today
+    edate = _date.fromisoformat(end) if end else (sdate + _td(days=6))
+    start_dt = _dt.combine(sdate, _dt.min.time())
+    end_excl = _dt.combine(edate + _td(days=1), _dt.min.time())
+
+    # Default ingredient fallback by dish name (match on the substring after " - ")
+    fallback = {
+        "Chicken Caesar Bowl": [("Chicken breast", 1.5, "lb"), ("Romaine", 2, "heads"), ("Parmesan", 1, "cup"), ("Caesar dressing", 1, "bottle")],
+        "Salmon & Asparagus": [("Salmon fillets", 4, "pcs"), ("Asparagus", 2, "bunch"), ("Lemon", 2, "pcs")],
+        "Turkey Lettuce Wraps": [("Ground turkey", 1, "lb"), ("Lettuce", 2, "heads"), ("Bell peppers", 2, "pcs")],
+        "Lean Turkey Chili": [("Ground turkey", 2, "lb"), ("Diced tomatoes", 2, "cans"), ("Kidney beans", 2, "cans"), ("Chili seasoning", 1, "packet")],
+        "Tuna Nicoise": [("Canned tuna", 4, "cans"), ("Green beans", 1, "lb"), ("Eggs", 6, "pcs"), ("Olives", 1, "jar")],
+        "Baked Cod & Broccoli": [("Cod fillets", 4, "pcs"), ("Broccoli", 2, "heads"), ("Olive oil", 1, "bottle")],
+        "Greek Chicken Bowl": [("Chicken breast", 1.5, "lb"), ("Cucumber", 2, "pcs"), ("Tomatoes", 4, "pcs"), ("Feta", 1, "block")],
+        "Turkey Meatballs & Veg": [("Ground turkey", 1.5, "lb"), ("Marinara", 1, "jar"), ("Zucchini", 3, "pcs"), ("Parmesan", 1, "cup")],
+        "Beef & Veg Stir-Fry": [("Beef strips", 1.5, "lb"), ("Broccoli", 1, "head"), ("Bell peppers", 2, "pcs"), ("Soy sauce", 1, "bottle")],
+        "Chicken Fajita Bowl": [("Chicken breast", 1.5, "lb"), ("Bell peppers", 3, "pcs"), ("Onions", 2, "pcs"), ("Fajita seasoning", 1, "packet")],
+        "Shrimp & Zoodles": [("Shrimp", 2, "lb"), ("Zucchini", 4, "pcs"), ("Garlic", 1, "bulb")],
+        "Steak & Big Salad": [("Steak", 2, "lb"), ("Mixed greens", 2, "bags"), ("Cherry tomatoes", 2, "pints")],
+        "Egg Roll in a Bowl": [("Ground pork", 1, "lb"), ("Cabbage", 1, "head"), ("Soy sauce", 1, "bottle")],
+        "Garlic Chicken & Veg": [("Chicken thighs", 1.5, "lb"), ("Green beans", 1, "lb"), ("Garlic", 1, "bulb")],
+    }
+
+    # Set RLS context
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        # Pull meals for window
+        meals = session.exec(
+            select(Meal)
+            .where(Meal.user_id == user.id)
+            .where(Meal.eaten_at >= start_dt, Meal.eaten_at < end_excl)
+            .order_by(Meal.eaten_at.asc())
+        ).all()
+
+        meal_ids = [m.id for m in meals] if meals else []
+        items_by_meal = {}
+        if meal_ids:
+            mis = session.exec(select(MealItem).where(MealItem.meal_id.in_(meal_ids))).all()
+            for it in mis:
+                items_by_meal.setdefault(it.meal_id, []).append(it)
+
+        # Aggregate { (name, unit) -> qty }
+        agg = {}
+        def add(name, qty, unit):
+            key = (name.strip(), (unit or "").strip())
+            agg[key] = agg.get(key, 0.0) + float(qty if qty is not None else 1.0)
+
+        for m in meals:
+            real_items = items_by_meal.get(m.id, [])
+            if real_items:
+                for it in real_items:
+                    add(it.name, it.quantity if it.quantity is not None else 1.0, it.unit)
+            else:
+                # derive dish name
+                dish = m.name.split(" - ", 1)[-1]
+                if dish in fallback:
+                    for (n, q, u) in fallback[dish]:
+                        add(n, q, u)
+
+        out = [{"name": k[0], "quantity": round(v, 2), "unit": (k[1] or None)} for k, v in sorted(agg.items(), key=lambda x: x[0][0].lower())]
+
+        if persist and out:
+            if clear_existing:
+                # Clear current unpurchased rows for this user to avoid duplicates
+                session.exec(text("DELETE FROM grocery_items WHERE user_id = :uid AND (purchased IS NULL OR purchased = false)").bindparams(uid=user.id))
+            for row in out:
+                gi = GroceryItem(user_id=user.id, name=row["name"], quantity=row["quantity"], unit=row["unit"], purchased=False)
+                session.add(gi)
+            session.commit()
+
+        return {"window": {"start": sdate.isoformat(), "end": edate.isoformat()}, "count": len(out), "items": out}
+    finally:
+        session.exec(text("RESET app.user_id"))
+
+# ---------- Intake (DB-backed with RLS) ----------
+class IntakeIn(BaseModel):
+    food_notes: Optional[str] = None
+    workout_notes: Optional[str] = None
+    name: Optional[str] = None
+    age: Optional[int] = None
+    sex: Optional[str] = None
+    height_in: Optional[int] = None
+    weight_lb: Optional[int] = None
+    diabetic: Optional[bool] = None
+    conditions: Optional[str] = None
+    meds: Optional[str] = None
+    goals: Optional[str] = None
+    zip: Optional[str] = None
+    gym: Optional[str] = None
+
+@router.get("/intake")
+def get_intake(
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    # Set RLS context for this transaction
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    row = session.exec(
+        select(Intake).where(Intake.user_id == user.id).order_by(Intake.id.desc()).limit(1)
+    ).first()
+    if not row:
+        return None
+    session.exec(text("RESET app.user_id"));
+    session.exec(text("RESET app.user_id"));
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "name": row.name,
+        "age": row.age,
+        "sex": row.sex,
+        "height_in": row.height_in,
+        "weight_lb": row.weight_lb,
+        "diabetic": row.diabetic,
+        "conditions": row.conditions,
+        "meds": row.meds,
+        "goals": row.goals,
+        "zip": row.zip,
+        "gym": row.gym,
+        "food_notes": getattr(row, "food_notes", None),
+        "workout_notes": getattr(row, "workout_notes", None),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }
+
+@router.post("/intake", status_code=201)
+def upsert_intake(
+    payload: IntakeIn,
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    # Set RLS context for this transaction
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+
+    # Try to fetch existing intake for this user (latest)
+    existing = session.exec(
+        select(Intake).where(Intake.user_id == user.id).order_by(Intake.id.desc()).limit(1)
+    ).first()
+
+    now_fields = {k: v for k, v in payload.dict().items() if v is not None}
+
+    if existing:
+        # Update existing
+        for k, v in now_fields.items():
+            setattr(existing, k, v)
+        # Always touch updated_at
+        from datetime import datetime as _dt
+        existing.updated_at = _dt.utcnow()
+        session.add(existing)
+        session.flush()
+        session.commit()
+        row = existing
+    else:
+        # Create new
+        from datetime import datetime as _dt
+        row = Intake(user_id=user.id, **now_fields)
+        # SQLModel defaults set created_at/updated_at; ensure updated_at touches now
+        row.updated_at = _dt.utcnow()
+        session.add(row)
+        session.flush()
+        session.commit()
+    session.exec(text("RESET app.user_id"));
+    session.exec(text("RESET app.user_id"));
+
+    return {
+        "id": row.id,
+        "user_id": row.user_id,
+        "name": row.name,
+        "age": row.age,
+        "sex": row.sex,
+        "height_in": row.height_in,
+        "weight_lb": row.weight_lb,
+        "diabetic": row.diabetic,
+        "conditions": row.conditions,
+        "meds": row.meds,
+        "goals": row.goals,
+        "zip": row.zip,
+        "gym": row.gym,
+        "food_notes": getattr(row, "food_notes", None),
+        "workout_notes": getattr(row, "workout_notes", None),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+    }

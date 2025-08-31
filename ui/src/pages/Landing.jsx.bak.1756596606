@@ -1,0 +1,19 @@
+import React from "react";
+import { useNavigate } from "react-router-dom";
+import { Button } from "@/components/ui/button";
+
+export default function Landing() {
+  const nav = useNavigate();
+  return (
+    <div className="min-h-[100dvh] grid place-items-center bg-white">
+      <div className="w-full max-w-xl text-center rounded-2xl border p-8 shadow-soft bg-white">
+        <h1 className="text-4xl md:text-5xl font-bold tracking-tight" style={{fontFamily:'Segoe UI, system-ui, -apple-system, Helvetica Neue, Arial, sans-serif'}}>Life – Health</h1>
+        <p className="text-gray-600 mt-2 mb-6">Welcome. Choose an option to continue.</p>
+        <div className="flex justify-center gap-3">
+          <Button size="lg" className="px-5 py-3" onClick={() => nav("/login")}>Login — Existing User</Button>
+          <Button size="lg" className="px-5 py-3" onClick={() => nav("/signup")}>Signup — New User</Button>
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -18,8 +18,15 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 // Utility: Local storage helpers
 const ls = {
   get(key, fallback) {
-    try { const v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch { return fallback; }
-  },
+  try {
+    const v = localStorage.getItem(key);
+    if (v == null) return fallback;
+    try { return JSON.parse(v); } catch { return v; }
+  } catch {
+    return fallback;
+  }
+},
+
   set(key, value) {
     try { localStorage.setItem(key, JSON.stringify(value)); } catch {}
   }
@@ -29,16 +36,35 @@ const ls = {
 function useApi() {
   const [baseUrl, setBaseUrl] = useState(() => {
     const urlParam = new URLSearchParams(window.location.search).get("api");
-    return ls.get("diet.baseUrl", urlParam || window.location.origin || "http://127.0.0.1:8010");
+    return ls.get("diet.baseUrl", urlParam || localStorage.getItem("diet.app.base") || `${window.location.protocol}//${window.location.hostname}:8010`);
   });
-  const [token, setToken] = useState(() => ls.get("diet.token", ""));
+  const [token, setToken] = useState(() => ls.get("diet.token", (localStorage.getItem("diet.app.token") || "")));
   const [userId, setUserId] = useState(() => ls.get("diet.userId", ""));
 
   useEffect(() => { ls.set("diet.baseUrl", baseUrl); }, [baseUrl]);
-  useEffect(() => { ls.set("diet.token", token); }, [token]);
+  useEffect(() => { ls.set("diet.token", token); }, [token, baseUrl]);
   useEffect(() => { ls.set("diet.userId", userId); }, [userId]);
 
-  async function request(path, { method = "GET", body, headers } = {}) {
+  
+  
+  // Listen for auth/base changes from overlay
+  useEffect(() => {
+    function onTok(e){ setToken(e.detail || localStorage.getItem("diet.app.token") || ""); }
+    function onBase(e){ setBaseUrl(e.detail || (localStorage.getItem("diet.app.base") || `${window.location.protocol}//${window.location.hostname}:8010`)); }
+    window.addEventListener("diet.token", onTok);
+    window.addEventListener("diet.base", onBase);
+    return () => { window.removeEventListener("diet.token", onTok); window.removeEventListener("diet.base", onBase); };
+  }, []);
+useEffect(() => {
+    (async () => {
+      try {
+        if (!token || userId) return;
+        const me = await request("/api/v1/auth/me");
+        if (me?.id) setUserId(String(me.id));
+      } catch (e) {}
+    })();
+  }, [token, baseUrl]);
+async function request(path, { method = "GET", body, headers } = {}) {
     const url = path.startsWith("http") ? path : `${baseUrl.replace(/\/$/, "")}${path.startsWith("/") ? path : "/" + path}`;
     const opts = {
       method,
@@ -130,7 +156,7 @@ function SettingsPanel({ api }) {
         </div>
         <div className="flex items-center gap-4">
           <Button onClick={healthCheck} disabled={checking}>
-            {checking ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Activity className="w-4 h-4 mr-2"/>}
+            {checking ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <Activity className="w-4 h-4 mr-2"/>}
             Check API
           </Button>
           {ping?.path && <Badge variant="secondary">Responded: {ping.path}</Badge>}
@@ -190,7 +216,7 @@ function ApiExplorer({ api }) {
         )}
         <div className="flex gap-4">
           <Button onClick={send} disabled={loading}>
-            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <PlayCircle className="w-4 h-4 mr-2"/>}
+            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <PlayCircle className="w-4 h-4 mr-2"/>}
             Send
           </Button>
           {resp && <Badge variant={resp.ok?"default":"destructive"}>{resp.ok?"Success":"Error"}</Badge>}
@@ -252,7 +278,25 @@ function GroceryList({ api }) {
     downloadTextFile(`grocery-list-${new Date().toISOString().slice(0,10)}.csv`, headers.join(",")+"\n"+rows);
   }
 
-  return (
+  
+// Build groceries from the current meal plan window (default 7 days)
+async function buildFromMeals(days = 7, replace = true) {
+  const iso = (d) => new Date(d).toISOString().slice(0, 10);
+  try {
+    const now = Date.now();
+    const start = iso(now);
+    const end = iso(now + (days - 1) * 24 * 60 * 60 * 1000);
+    setStatus(`Building from meal plan ${start}..${end}...`);
+    await api.request(`/api/v1/groceries/sync_from_meals?start=${start}&end=${end}&persist=true&clear_existing=${replace}`, { method: "POST" });
+    const data = await api.request("/api/v1/groceries");
+    setItems(data);
+    setStatus(`Built from meal plan (${data.length} items)`);
+  } catch (err) {
+    console.error(err);
+    setStatus("Failed to build from meal plan.");
+  }
+}
+return (
     <Card className="card-shadow">
       <CardHeader>
         <CardTitle className="flex items-center gap-4"><ListChecks className="w-5 h-5"/> Grocery List</CardTitle>
@@ -264,15 +308,17 @@ function GroceryList({ api }) {
           <div className="grid gap-1"><Label>Qty</Label><Input type="number" value={quantity} onChange={(e)=>setQuantity(e.target.value)} /></div>
           <div className="grid gap-1"><Label>Unit</Label><Input value={unit} onChange={(e)=>setUnit(e.target.value)} placeholder="ct, gallon, lb"/></div>
           <div className="flex items-end gap-4">
-            <Button onClick={add}><Save className="w-4 h-4 mr-2"/>Add</Button>
+            <Button onClick={add}><Save className="w-4 h-4 mr-2 text-white"/>Add</Button>
             <Button variant="secondary" onClick={exportCsv}><Download className="w-4 h-4 mr-2"/>Export</Button>
           </div>
         </div>
         <div className="flex items-center gap-4">
           <Button variant="outline" onClick={loadFromApi} disabled={loading}>
-            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <RefreshCcw className="w-4 h-4 mr-2"/>}
+            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <RefreshCcw className="w-4 h-4 mr-2 text-white"/>}
             Sync from API
           </Button>
+            <Button variant="default" onClick={() => buildFromMeals(7, true)} className="ml-2">Build from Meal Plan (7 days)</Button>
+            
           {status && <Badge variant="secondary">{status}</Badge>}
         </div>
         <div className="overflow-x-auto rounded-xl border">
@@ -312,31 +358,256 @@ function GroceryList({ api }) {
 }
 
 // Meal Plan (integrates with /plans/{userId}/menu/build?format=json when available)
+// --- About You (Intake editor) ---
+function AboutYou({ api }) {
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState("");
+  const [err, setErr] = useState("");
+
+  const [form, setForm] = useState({
+    name: "", age: "", sex: "", height_in: "", weight_lb: "",
+    diabetic: false, conditions: "", meds: "", goals: "", zip: "", gym: "",
+    food_notes: "", workout_notes: ""
+  });
+
+  useEffect(() => {
+    (async () => {
+      if (!api.token) return;
+      setLoading(true);
+      try {
+        const data = await api.request("/api/v1/intake");
+        if (data) {
+          setForm({
+            name: data.name ?? "",
+            age: data.age ?? "",
+            sex: data.sex ?? "",
+            height_in: data.height_in ?? "",
+            weight_lb: data.weight_lb ?? "",
+            diabetic: !!data.diabetic,
+            conditions: data.conditions ?? "",
+            meds: data.meds ?? "",
+            goals: data.goals ?? "",
+            zip: data.zip ?? "",
+            gym: data.gym ?? "",
+            food_notes: data.food_notes ?? "",
+            workout_notes: data.workout_notes ?? "",
+          });
+          setStatus("Loaded your intake");
+        } else {
+          setStatus("No intake yet — fill it out and submit.");
+        }
+      } catch (e) {
+        setStatus("Could not load intake yet.");
+      } finally { setLoading(false); }
+    })();
+  }, [api.token, api.baseUrl]);
+
+  function setField(k, v){ setForm(prev => ({ ...prev, [k]: v })); }
+
+  // Simple heuristics for safety check (UI-only)
+  function parseMealsPerDay(notes) {
+    if (!notes) return null;
+    const m = String(notes).match(/(\d+)\s*meals?/i);
+    return m ? parseInt(m[1], 10) : null;
+  }
+  function parseLossPerWeek(goals) {
+    if (!goals) return null;
+    const g = goals.toLowerCase();
+    const m = g.match(/lose\s+(\d+)\s*(lb|pounds?)/i);
+    if (!m) return null;
+    const pounds = parseInt(m[1], 10);
+    let weeks = null;
+    const w = g.match(/in\s+(\d+)\s*(weeks?|wks?)/i);
+    if (w) weeks = parseInt(w[1], 10);
+    const perw = g.match(/(\d+(?:\.\d+)?)\s*(lb|pounds?)\s*per\s*week/);
+    if (perw) return parseFloat(perw[1]);
+    if (weeks && weeks > 0) return pounds / weeks;
+    return null;
+  }
+
+  async function submit() {
+    setErr(""); setStatus("");
+    try {
+      const meals = parseMealsPerDay(form.food_notes);
+      const rate = parseLossPerWeek(form.goals); // lb/week
+      if (rate && meals && meals >= 3 && rate > 2.0) {
+        const ok = confirm(
+          "Your goals look aggressive for a 3‑meals/day pattern.\n\n" +
+          "Please be safe and speak with a medical professional before considering this diet. " +
+          "Given the amount of weight and timeframe, an intermittent fasting pattern (~2 meals/day) " +
+          "may fit better.\n\nContinue and save these intake settings?"
+        );
+        if (!ok) return;
+      }
+      setSaving(true);
+      const payload = { ...form };
+      // normalize numeric optionals
+      payload.age = payload.age ? Number(payload.age) : undefined;
+      payload.height_in = payload.height_in ? Number(payload.height_in) : undefined;
+      payload.weight_lb = payload.weight_lb ? Number(payload.weight_lb) : undefined;
+
+      await api.request("/api/v1/intake", { method: "POST", body: payload });
+      setStatus("Saved.");
+    } catch(e) {
+      setErr(String(e.message || e));
+    } finally { setSaving(false); }
+  }
+
+  return (
+    <Card className="card-shadow">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-3"><FileJson className="w-5 h-5"/> About You</CardTitle>
+        <CardDescription>This information personalizes your plan. You can update it anytime.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {loading && <div>Loading…</div>}
+        {!!err && <div className="text-red-600 text-sm">{err}</div>}
+        {!!status && <div className="text-sm text-muted-foreground">{status}</div>}
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="grid gap-1">
+            <Label>Name</Label>
+            <Input value={form.name} onChange={e=>setField("name", e.target.value)} placeholder="Your name"/>
+          </div>
+          <div className="grid gap-1">
+            <Label>Age</Label>
+            <Input type="number" value={form.age} onChange={e=>setField("age", e.target.value)} placeholder="e.g., 34"/>
+          </div>
+          <div className="grid gap-1">
+            <Label>Sex</Label>
+            <Select value={form.sex || ""} onValueChange={v=>setField("sex", v)}>
+              <SelectTrigger><SelectValue placeholder="Select"/></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="M">Male</SelectItem>
+                <SelectItem value="F">Female</SelectItem>
+                <SelectItem value="O">Other / Prefer not to say</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label>Height (inches)</Label>
+            <Input type="number" value={form.height_in} onChange={e=>setField("height_in", e.target.value)} placeholder="e.g., 70"/>
+          </div>
+          <div className="grid gap-1">
+            <Label>Weight (lb)</Label>
+            <Input type="number" value={form.weight_lb} onChange={e=>setField("weight_lb", e.target.value)} placeholder="e.g., 190"/>
+          </div>
+          <div className="grid gap-1">
+            <Label>ZIP / Location</Label>
+            <Input value={form.zip || ""} onChange={e=>setField("zip", e.target.value)} placeholder="optional"/>
+          </div>
+          <div className="grid gap-1">
+            <Label>Gym</Label>
+            <Input value={form.gym || ""} onChange={e=>setField("gym", e.target.value)} placeholder="e.g., Crunch, Planet Fitness, Home"/>
+          </div>
+          <div className="flex items-center gap-3 mt-6">
+            <Switch checked={!!form.diabetic} onCheckedChange={v=>setField("diabetic", !!v)} />
+            <Label>Diabetic</Label>
+          </div>
+        </div>
+
+        <div className="grid gap-1">
+          <Label>Health Conditions & Meds</Label>
+          <Textarea rows={3} value={form.conditions} onChange={e=>setField("conditions", e.target.value)} placeholder="e.g., hypertension, shoulder pain, meds list…"/>
+        </div>
+
+        <div className="grid gap-1">
+          <Label>Goals</Label>
+          <Textarea rows={3} value={form.goals} onChange={e=>setField("goals", e.target.value)} placeholder="e.g., Lose 15 lb in 8 weeks; improve A1C; feel more energetic"/>
+          <p className="text-sm text-muted-foreground mt-1">Tip: Include timelines (e.g., “in 8 weeks”) so we can tailor pace and warnings.</p>
+        </div>
+
+        <div className="grid gap-1">
+          <Label>Notes about food choices (free‑form)</Label>
+          <Textarea rows={5} value={form.food_notes} onChange={e=>setField("food_notes", e.target.value)}
+            placeholder={"Examples:\n• Prefer 15–20 min meals; dislike cilantro; limit dairy\n• Usually 3 meals/day; ok with salmon & chicken; avoid pork\n• Like Mediterranean flavors; pantry staples only Mon–Thu"} />
+          <p className="text-sm text-muted-foreground mt-1">
+            Describe preferences, dislikes, time available, and meals/day. We interpret this to guide your plan.
+          </p>
+        </div>
+
+        <div className="grid gap-1">
+          <Label>Workout preferences & constraints (free‑form)</Label>
+          <Textarea rows={5} value={form.workout_notes} onChange={e=>setField("workout_notes", e.target.value)}
+            placeholder={"Examples:\n• Home only; adjustable dumbbells to 50 lb, bands\n• Prefer yoga & calisthenics; injured shoulder—avoid overhead pressing\n• Gym: Planet Fitness (Smith machine ok); 4x/week 30–45 min"} />
+          <p className="text-sm text-muted-foreground mt-1">
+            Include gym/home, equipment, preferred styles, and any injuries or limits.
+          </p>
+        </div>
+
+        <div className="flex gap-3">
+          <Button onClick={submit} disabled={saving}>Submit</Button>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Keep MealPlan below
 function MealPlan({ api }) {
   const [plan, setPlan] = useState(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
 
   async function buildPlan() {
-    if (!api.userId) { setStatus("Set your User ID in Settings first."); return; }
     setLoading(true); setStatus(""); setPlan(null);
     try {
-      const data = await api.request(`/plans/${api.userId}/menu/build?format=json`, { method: "POST" });
-      setPlan(data);
-      setStatus("Plan built");
+      // Try to ensure we have a user id for downstream features (non-blocking)
+      let uid = api.userId;
+      if (!uid && api.token) {
+        try {
+          const me = await api.request("/api/v1/auth/me");
+          if (me?.id) { uid = String(me.id); api.setUserId(uid); }
+        } catch {}
+      }
+
+      // Load meals from the real API
+      const meals = await api.request("/api/v1/meals");
+      if (!Array.isArray(meals) || meals.length === 0) {
+        setStatus("No meals on server yet — showing demo.");
+        setPlan({ week: 1, days: [
+          { day: "Mon", meals: [{ time: "12:00", title: "Egg scramble", carbs: 6, kcal: 420 }, { time: "18:00", title: "Grilled chicken + salad", carbs: 10, kcal: 520 }]},
+          { day: "Tue", meals: [{ time: "12:00", title: "Greek yogurt + walnuts", carbs: 9, kcal: 380 }, { time: "18:00", title: "Beef stir-fry (cauli rice)", carbs: 11, kcal: 560 }]},
+          { day: "Wed", meals: [{ time: "12:00", title: "Tuna avocado boats", carbs: 5, kcal: 430 }, { time: "18:00", title: "Turkey lettuce tacos", carbs: 12, kcal: 540 }]},
+          { day: "Thu", meals: [{ time: "12:00", title: "Protein shake", carbs: 7, kcal: 350 }, { time: "18:00", title: "Pork chops + green beans", carbs: 9, kcal: 570 }]},
+          { day: "Fri", meals: [{ time: "12:00", title: "Cottage cheese bowl", carbs: 8, kcal: 360 }, { time: "18:00", title: "Salmon + asparagus", carbs: 6, kcal: 550 }]},
+          { day: "Sat", meals: [{ time: "12:00", title: "Chicken Caesar salad", carbs: 10, kcal: 480 }, { time: "18:00", title: "Burger (no bun) + slaw", carbs: 14, kcal: 590 }]},
+          { day: "Sun", meals: [{ time: "12:00", title: "Omelet + spinach", carbs: 7, kcal: 410 }, { time: "18:00", title: "Roast chicken + veg", carbs: 12, kcal: 560 }]} 
+        ]});
+      } else {
+        // Group meals by eaten_at date (YYYY-MM-DD)
+        const byDay = {};
+        for (const m of meals) {
+          const day = (m.eaten_at || "").slice(0,10) || "Day";
+          (byDay[day] ||= []).push(m);
+        }
+        const days = Object.keys(byDay).sort().map(day => ({
+          day,
+          meals: byDay[day].map(m => ({
+            time: (m.eaten_at || "").slice(11,16) || "",
+            title: m.name || "Meal",
+            carbs: m.total_carbs ?? null,
+            kcal: m.total_calories ?? null,
+          })),
+        }));
+        setPlan({ week: 1, days });
+        setStatus("Loaded meals from API");
+      }
     } catch (e) {
-      setStatus("Could not reach /plans/... endpoint. Showing demo layout.");
-      // Demo
+      setStatus("Could not load meals — showing demo.");
       setPlan({ week: 1, days: [
         { day: "Mon", meals: [{ time: "12:00", title: "Egg scramble", carbs: 6, kcal: 420 }, { time: "18:00", title: "Grilled chicken + salad", carbs: 10, kcal: 520 }]},
-        { day: "Tue", meals: [{ time: "12:00", title: "Greek yogurt + walnuts", carbs: 9, kcal: 380 }, { time: "18:00", title: "Beef stir‑fry (cauli rice)", carbs: 11, kcal: 560 }]},
+        { day: "Tue", meals: [{ time: "12:00", title: "Greek yogurt + walnuts", carbs: 9, kcal: 380 }, { time: "18:00", title: "Beef stir-fry (cauli rice)", carbs: 11, kcal: 560 }]},
         { day: "Wed", meals: [{ time: "12:00", title: "Tuna avocado boats", carbs: 5, kcal: 430 }, { time: "18:00", title: "Turkey lettuce tacos", carbs: 12, kcal: 540 }]},
         { day: "Thu", meals: [{ time: "12:00", title: "Protein shake", carbs: 7, kcal: 350 }, { time: "18:00", title: "Pork chops + green beans", carbs: 9, kcal: 570 }]},
         { day: "Fri", meals: [{ time: "12:00", title: "Cottage cheese bowl", carbs: 8, kcal: 360 }, { time: "18:00", title: "Salmon + asparagus", carbs: 6, kcal: 550 }]},
         { day: "Sat", meals: [{ time: "12:00", title: "Chicken Caesar salad", carbs: 10, kcal: 480 }, { time: "18:00", title: "Burger (no bun) + slaw", carbs: 14, kcal: 590 }]},
         { day: "Sun", meals: [{ time: "12:00", title: "Omelet + spinach", carbs: 7, kcal: 410 }, { time: "18:00", title: "Roast chicken + veg", carbs: 12, kcal: 560 }]} 
       ]});
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }
 
   function exportCsv() {
@@ -344,7 +615,7 @@ function MealPlan({ api }) {
     const rows = [["day","time","title","carbs","kcal"]].concat(
       plan.days.flatMap(d => d.meals.map(m => [d.day, m.time, m.title, m.carbs ?? "", m.kcal ?? ""]))
     );
-    const text = rows.map(r=> r.map(x=> JSON.stringify(x ?? "")).join(",")).join("\n");
+    const text = rows.map(r => r.map(x => JSON.stringify(x ?? "")).join(",")).join("\n");
     downloadTextFile(`meal-plan-week-${plan.week||"x"}.csv`, text);
   }
 
@@ -352,12 +623,12 @@ function MealPlan({ api }) {
     <Card className="card-shadow">
       <CardHeader>
         <CardTitle className="flex items-center gap-4"><Utensils className="w-5 h-5"/> Meal Plan</CardTitle>
-        <CardDescription>Generate your 2‑meals/day plan from the backend, or preview a demo layout.</CardDescription>
+        <CardDescription>Generate your 2-meals/day plan from the backend, or preview a demo layout.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="flex items-center gap-4">
           <Button onClick={buildPlan} disabled={loading}>
-            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <RefreshCcw className="w-4 h-4 mr-2"/>}
+            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <RefreshCcw className="w-4 h-4 mr-2 text-white"/>}
             Build / Refresh
           </Button>
           {plan && <Button variant="secondary" onClick={exportCsv}><Download className="w-4 h-4 mr-2"/>Export CSV</Button>}
@@ -392,62 +663,6 @@ function MealPlan({ api }) {
     </Card>
   );
 }
-
-// Workout Planner – quick weekly checklist based on Crunch Fitness + daily walk
-function Workouts() {
-  const defaultPlan = useMemo(()=>{
-    const days = ["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
-    const now = new Date();
-    const start = new Date(now); start.setDate(now.getDate() - ((now.getDay()+6)%7)); // Monday
-    return days.map((d, i) => {
-      const dayDate = new Date(start); dayDate.setDate(start.getDate()+i);
-      const date = dayDate.toISOString().slice(0,10);
-      return {
-        day: d,
-        date,
-        tasks: [
-          { t: "Morning walk (6:40–7:00 AM)", done: false },
-          { t: "Crunch Fitness (6:00–7:00 PM): full‑body circuit (machines + 10‑15 min cardio)", done: false }
-        ]
-      };
-    });
-  }, []);
-  const [week, setWeek] = useState(() => ls.get("diet.workouts", defaultPlan));
-  useEffect(()=> ls.set("diet.workouts", week), [week]);
-
-  function toggle(dayIdx, taskIdx) {
-    setWeek(prev => prev.map((d,i)=> i!==dayIdx? d : ({...d, tasks: d.tasks.map((t,k)=> k!==taskIdx? t : ({...t, done: !t.done})) })));
-  }
-
-  return (
-    <Card className="card-shadow">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-4"><Dumbbell className="w-5 h-5"/> Weekly Workouts</CardTitle>
-        <CardDescription>Based on your schedule: daily walk + evening Crunch session. Tweak as you like.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid md:grid-cols-2 gap-4">
-          {week.map((d, i) => (
-            <Card key={i}>
-              <CardHeader>
-                <CardTitle className="text-base">{d.day} <span className="text-muted-foreground font-normal ml-2">{d.date}</span></CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-3 workouts-list">
-                {d.tasks.map((task, k) => (
-                  <label key={k} className="flex items-center gap-3">
-                    <Checkbox checked={task.done} onCheckedChange={()=>toggle(i,k)} />
-                    <span className={task.done?"line-through text-muted-foreground":""}>{task.t}</span>
-                  </label>
-                ))}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 // Trackers (weight + glucose)
 function Trackers() {
   const [entries, setEntries] = useState(() => ls.get("diet.track", []));
@@ -484,7 +699,7 @@ function Trackers() {
           <div className="grid gap-1"><Label>Weight (lb)</Label><Input type="number" value={weight} onChange={(e)=>setWeight(e.target.value)} placeholder="295"/></div>
           <div className="grid gap-1"><Label>Glucose (mg/dL)</Label><Input type="number" value={glucose} onChange={(e)=>setGlucose(e.target.value)} placeholder="120"/></div>
           <div className="flex items-end gap-4">
-            <Button onClick={add}><Save className="w-4 h-4 mr-2"/>Add</Button>
+            <Button onClick={add}><Save className="w-4 h-4 mr-2 text-white"/>Add</Button>
             <Button variant="secondary" onClick={exportCsv}><Download className="w-4 h-4 mr-2"/>Export</Button>
           </div>
         </div>
@@ -567,65 +782,124 @@ function Intake({ api }) {
   function update(k, v) { setForm(prev => ({ ...prev, [k]: v })); }
 
   async function saveToApi() {
-    setSaving(true); setResp(null);
-    try {
-      // Try common paths; adjust in API Explorer if yours differs
-      const candidates = ["/intake", "/users/profile", "/users/intake"];
-      for (const p of candidates) {
-        try { const r = await api.request(p, { method: "POST", body: form }); setResp({ path: p, r }); setSaving(false); return; } catch {}
-      }
-      throw new Error("No intake endpoint responded.");
-    } catch (e) { setResp({ error: String(e) }); } finally { setSaving(false); }
+  setSaving(true); setResp(null);
+  try {
+    const base = (new URLSearchParams(location.search).get("api"))
+      || localStorage.getItem("diet.app.base")
+      || `${location.protocol}//${location.hostname}:8010`;
+    const token = localStorage.getItem("diet.app.token") || localStorage.getItem("diet.token") || "";
+    const r = await fetch(`${base}/api/v1/intake`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(form),
+    });
+    const j = await r.json().catch(()=>({}));
+    if (!r.ok) throw new Error(j.detail || j.error || r.statusText);
+    setResp({ path: "/api/v1/intake", r: j });
+  } catch (e) {
+    setResp({ error: String(e) });
+  } finally {
+    setSaving(false);
+  }
   }
 
-  return (
+return (
     <Card className="card-shadow">
       <CardHeader>
-        <CardTitle className="flex items-center gap-4"><Activity className="w-5 h-5"/> Health Intake</CardTitle>
-        <CardDescription>Stores locally and attempts to POST to a likely backend endpoint.</CardDescription>
+        <CardTitle className="flex items-center gap-3"><Activity className="w-5 h-5"/> Intake</CardTitle>
+        <CardDescription>Fill in your details, then save to the API (auth required).</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
-        <div className="grid md:grid-cols-3 gap-3">
-          <div className="grid gap-1"><Label>Name</Label><Input value={form.name} onChange={(e)=>update("name", e.target.value)} /></div>
-          <div className="grid gap-1"><Label>Age</Label><Input type="number" value={form.age} onChange={(e)=>update("age", Number(e.target.value))} /></div>
-          <div className="grid gap-1"><Label>Sex</Label>
-            <Select value={form.sex} onValueChange={(v)=>update("sex", v)}>
-              <SelectTrigger><SelectValue/></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="male">Male</SelectItem>
-                <SelectItem value="female">Female</SelectItem>
-                <SelectItem value="other">Other</SelectItem>
-              </SelectContent>
-            </Select>
+        <div className="grid md:grid-cols-3 gap-4">
+          <div className="grid gap-1">
+            <Label>Name</Label>
+            <Input value={form.name} onChange={(e)=>update("name", e.target.value)} placeholder="Your name"/>
           </div>
-          <div className="grid gap-1"><Label>Height (in)</Label><Input type="number" value={form.height_in} onChange={(e)=>update("height_in", Number(e.target.value))} /></div>
-          <div className="grid gap-1"><Label>Weight (lb)</Label><Input type="number" value={form.weight_lb} onChange={(e)=>update("weight_lb", Number(e.target.value))} /></div>
-          <div className="flex items-center gap-3 mt-6"><Switch checked={!!form.diabetic} onCheckedChange={(v)=>update("diabetic", !!v)} /><Label>Diabetes</Label></div>
-          <div className="md:col-span-3 grid gap-1"><Label>Other conditions</Label><Input value={form.conditions} onChange={(e)=>update("conditions", e.target.value)} /></div>
-          <div className="md:col-span-3 grid gap-1"><Label>Medications</Label><Input value={form.meds} onChange={(e)=>update("meds", e.target.value)} /></div>
-          <div className="md:col-span-3 grid gap-1"><Label>Goals</Label><Textarea rows={3} value={form.goals} onChange={(e)=>update("goals", e.target.value)} /></div>
-          <div className="grid gap-1"><Label>ZIP</Label><Input value={form.zip} onChange={(e)=>update("zip", e.target.value)} /></div>
-          <div className="grid gap-1"><Label>Gym</Label>
-            <Select value={form.gym} onValueChange={(v)=>update("gym", v)}>
-              <SelectTrigger><SelectValue/></SelectTrigger>
-              <SelectContent>
-                {['Crunch','Planet Fitness','24 Hour Fitness','Gold\'s Gym','Anytime Fitness','Home'].map(g=> <SelectItem key={g} value={g}>{g}</SelectItem>)}
-              </SelectContent>
-            </Select>
+          <div className="grid gap-1">
+            <Label>Age</Label>
+            <Input type="number" value={form.age} onChange={(e)=>update("age", Number(e.target.value||0))} />
+          </div>
+          <div className="grid gap-1">
+            <Label>Sex</Label>
+            <Input value={form.sex} onChange={(e)=>update("sex", e.target.value)} placeholder="male / female"/>
+          </div>
+
+          <div className="grid gap-1">
+            <Label>Height (in)</Label>
+            <Input type="number" value={form.height_in} onChange={(e)=>update("height_in", Number(e.target.value||0))} />
+          </div>
+          <div className="grid gap-1">
+            <Label>Weight (lb)</Label>
+            <Input type="number" value={form.weight_lb} onChange={(e)=>update("weight_lb", Number(e.target.value||0))} />
+          </div>
+          <div className="grid gap-1">
+            <Label>Diabetic</Label>
+            <div className="h-10 flex items-center">
+              <Checkbox checked={!!form.diabetic} onCheckedChange={(v)=>update("diabetic", !!v)} />
+              <span className="ml-2 text-sm text-muted-foreground">Yes</span>
+            </div>
+          </div>
+
+          <div className="md:col-span-3 grid gap-1">
+            <Label>Conditions</Label>
+            <Input value={form.conditions} onChange={(e)=>update("conditions", e.target.value)} placeholder="HTN, HLD, …"/>
+          </div>
+          <div className="md:col-span-3 grid gap-1">
+            <Label>Meds</Label>
+            <Input value={form.meds} onChange={(e)=>update("meds", e.target.value)} placeholder="Lantus, …"/>
+          </div>
+          <div className="md:col-span-3 grid gap-1">
+            <Label>Goals</Label>
+            <Input value={form.goals} onChange={(e)=>update("goals", e.target.value)} placeholder="Lose 70 lb in 6 months, improve A1C"/>
+          </div>
+
+          <div className="grid gap-1">
+            <Label>ZIP</Label>
+            <Input value={form.zip} onChange={(e)=>update("zip", e.target.value)} placeholder="63011"/>
+          </div>
+          <div className="grid gap-1">
+            <Label>Gym</Label>
+            <Input value={form.gym} onChange={(e)=>update("gym", e.target.value)} placeholder="Crunch / PF / Anytime / …"/>
           </div>
         </div>
+
         <div className="flex items-center gap-4">
-          <Button onClick={saveToApi} disabled={saving}>
-            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin"/> : <Save className="w-4 h-4 mr-2"/>}
-            Save to API (best‑guess)
+          <Button variant="default" onClick={saveToApi} disabled={saving}>
+            {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin text-white"/> : <Save className="w-4 h-4 mr-2 text-white"/>}
+            Save to API
           </Button>
-          {resp?.path && <Badge variant="secondary">Saved to {resp.path}</Badge>}
+          {resp?.path && <Badge variant="secondary">Saved: {resp.path}</Badge>}
         </div>
+
         {resp && <JsonView data={resp.error ? { error: resp.error } : resp.r} />}
       </CardContent>
     </Card>
   );
 }
+
+
+function Workouts() {
+  const [note, setNote] = useState("");
+  return (
+    <Card className="card-shadow">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-4"><Dumbbell className="w-5 h-5"/> Workouts</CardTitle>
+        <CardDescription>Starter workouts stub (component was missing). You can log a quick note below.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="grid gap-1">
+          <Label>Workout note</Label>
+          <Input value={note} onChange={(e)=>setNote(e.target.value)} placeholder="e.g., Leg press 3×15 @ 250 lb"/>
+        </div>
+        <div className="text-sm text-muted-foreground">We’ll replace this with machine-level plans next.</div>
+      </CardContent>
+    </Card>
+  );
+}
+
 
 // Root App UI
 export default function App() {
@@ -634,7 +908,7 @@ export default function App() {
 
   return (
     <div className="min-h-[100dvh] bg-gradient-to-b from-background to-muted/30">
-      <header className="sticky top-0 z-10 backdrop-blur bg-[#4B0082] text-white border-b shadow-soft shadow-soft">
+      <header className="sticky top-0 z-10 backdrop-blur bg-[#48A860] text-white hover:bg-[#4B0082] border-b shadow-soft shadow-soft">
         <div className="w-full px-6 py-4 flex items-center justify-center">
           <div className="flex items-center gap-3">
             <h1 className="text-2xl md:text-3xl font-bold tracking-tight text-white ml-2">Life – Health</h1>
@@ -650,11 +924,13 @@ export default function App() {
         </div>
       </header>
 
+      {!api.token && <SimpleAuthFlow />}
       <main className="w-full px-6 py-6 md:py-8 lg:py-10 grid gap-5 md:gap-8 lg:gap-10">
         <Tabs value={active} onValueChange={setActive} className="w-full">
           <TabsList className="flex flex-wrap gap-2">
             <TabsTrigger value="intake" className="gap-2"><Activity className="w-4 h-4"/> Intake</TabsTrigger>
             <TabsTrigger value="meal" className="gap-2"><Utensils className="w-4 h-4"/> Meal Plan</TabsTrigger>
+            <TabsTrigger value="about" className="gap-2"><FileJson className="w-4 h-4"/> About You</TabsTrigger>
             <TabsTrigger value="groceries" className="gap-2"><ListChecks className="w-4 h-4"/> Groceries</TabsTrigger>
             <TabsTrigger value="workouts" className="gap-2"><Dumbbell className="w-4 h-4"/> Workouts</TabsTrigger>
             <TabsTrigger value="trackers" className="gap-2"><BarChart3 className="w-4 h-4"/> Trackers</TabsTrigger>
@@ -662,6 +938,7 @@ export default function App() {
 
           <TabsContent value="intake"><Intake api={api}/></TabsContent>
           <TabsContent value="meal"><MealPlan api={api}/></TabsContent>
+          <TabsContent value="about"><AboutYou api={api}/></TabsContent>
           <TabsContent value="groceries"><GroceryList api={api}/></TabsContent>
           <TabsContent value="workouts"><Workouts/></TabsContent>
           <TabsContent value="trackers"><Trackers/></TabsContent>

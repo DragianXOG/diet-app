@@ -14,6 +14,41 @@ class User(SQLModel, table=True):
     email: str = Field(sa_column=sa.Column(sa.String(254), unique=True, index=True, nullable=False))
     password_hash: str = Field(nullable=False)
     created_at: datetime = Field(default_factory=datetime.utcnow, nullable=False)
+    # Used for server-side token revocation (logout bumps this)
+    token_version: int = Field(default=0, sa_column=sa.Column(sa.Integer, nullable=False))
+
+class Intake(SQLModel, table=True):
+    food_notes: Optional[str] = Field(default=None)
+    workout_notes: Optional[str] = Field(default=None)
+    __tablename__ = "intakes"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(
+        sa_column=sa.Column(
+            sa.Integer,
+            sa.ForeignKey("users.id", ondelete="CASCADE"),
+            index=True,
+            nullable=False,
+        )
+    )
+    name: Optional[str] = Field(default=None)
+    age: Optional[int] = Field(default=None)
+    sex: Optional[str] = Field(default=None)
+    height_in: Optional[int] = Field(default=None)
+    weight_lb: Optional[int] = Field(default=None)
+    diabetic: Optional[bool] = Field(default=None)
+    conditions: Optional[str] = Field(default=None)
+    meds: Optional[str] = Field(default=None)
+    goals: Optional[str] = Field(default=None)
+    zip: Optional[str] = Field(default=None)
+    gym: Optional[str] = Field(default=None)
+    created_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=sa.Column(sa.DateTime, nullable=False)
+    )
+    updated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=sa.Column(sa.DateTime, nullable=False)
+    )
 
 class Meal(SQLModel, table=True):
     __tablename__ = "meals"

@@ -1,0 +1,50 @@
+// Unified Button component
+// Spec:
+// - Idle: bg #48A860, border #48A860, text white
+// - Hover/Active/Selected: bg #4B0082, border #4B0082, text white
+// - Padding: px-3.5 py-2; rounded-xl; text-sm; transition; shadow-soft; gap-2
+import React, { forwardRef } from "react";
+
+function cx(...parts) {
+  return parts.filter(Boolean).join(" ");
+}
+
+const base =
+  "inline-flex items-center justify-center px-3.5 py-2 rounded-xl text-sm transition border shadow-soft gap-2 " +
+  "select-none disabled:opacity-50 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2";
+
+const defaultVariant =
+  // idle (green)
+  "bg-[#48A860] text-white border-[#48A860] " +
+  // hover/active/keyboard focus states (purple)
+  "hover:bg-[#4B0082] hover:border-[#4B0082] " +
+  "active:bg-[#4B0082] active:border-[#4B0082] " +
+  "focus-visible:ring-[#4B0082] " +
+  // selected states (tabs/aria)
+  "aria-selected:bg-[#4B0082] aria-selected:border-[#4B0082] aria-selected:text-white " +
+  "data-[state=active]:bg-[#4B0082] data-[state=active]:border-[#4B0082]";
+
+// Optional variants for later use; keep minimal to avoid surprises.
+const outlineVariant =
+  "bg-transparent text-[#48A860] border-[#48A860] " +
+  "hover:bg-[#4B0082] hover:text-white hover:border-[#4B0082] " +
+  "active:bg-[#4B0082] active:text-white active:border-[#4B0082] " +
+  "focus-visible:ring-[#4B0082]";
+
+export const Button = forwardRef(function Button(
+  { className, variant = "default", type = "button", ...props },
+  ref
+) {
+  const variantClass =
+    variant === "outline" ? outlineVariant : defaultVariant;
+  return (
+    <button
+      ref={ref}
+      type={type}
+      className={cx(base, variantClass, className)}
+      {...props}
+    />
+  );
+});
+
+export default Button;

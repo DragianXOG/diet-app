@@ -45,3 +45,6 @@ input, select, textarea { background:#ffffff !important; color:#111827 !importan
 
 /* Light tabs strip */
 .tabs-strip { background: rgba(75,0,130,.06) !important; }
+
+/* Unified button spacing */
+button+button{margin-left:.5rem;}

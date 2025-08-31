@@ -1,0 +1,40 @@
+import React, { forwardRef } from "react";
+function cx(...p){ return p.filter(Boolean).join(" "); }
+
+// Base: shared structure + focus ring + soft shadow
+const base = "inline-flex items-center justify-center rounded-xl transition border shadow-soft gap-2 "
+  + "select-none disabled:opacity-50 disabled:pointer-events-none "
+  + "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2";
+
+// All variants map to the same green→purple style
+const variants = {
+  default: "bg-[#48A860] text-white border-[#48A860] hover:bg-[#4B0082] hover:border-[#4B0082] active:bg-[#4B0082] active:border-[#4B0082] focus-visible:ring-[#4B0082] aria-selected:bg-[#4B0082] aria-selected:border-[#4B0082] aria-selected:text-white data-[state=active]:bg-[#4B0082] data-[state=active]:border-[#4B0082]",
+  outline: "bg-[#48A860] text-white border-[#48A860] hover:bg-[#4B0082] hover:border-[#4B0082] active:bg-[#4B0082] active:border-[#4B0082] focus-visible:ring-[#4B0082] aria-selected:bg-[#4B0082] aria-selected:border-[#4B0082] aria-selected:text-white data-[state=active]:bg-[#4B0082] data-[state=active]:border-[#4B0082]",
+  secondary: "bg-[#48A860] text-white border-[#48A860] hover:bg-[#4B0082] hover:border-[#4B0082] active:bg-[#4B0082] active:border-[#4B0082] focus-visible:ring-[#4B0082] aria-selected:bg-[#4B0082] aria-selected:border-[#4B0082] aria-selected:text-white data-[state=active]:bg-[#4B0082] data-[state=active]:border-[#4B0082]",
+  ghost: "bg-[#48A860] text-white border-[#48A860] hover:bg-[#4B0082] hover:border-[#4B0082] active:bg-[#4B0082] active:border-[#4B0082] focus-visible:ring-[#4B0082] aria-selected:bg-[#4B0082] aria-selected:border-[#4B0082] aria-selected:text-white data-[state=active]:bg-[#4B0082] data-[state=active]:border-[#4B0082]",
+};
+
+// Sizes (padding + font-size)
+const sizes = {
+  sm: "px-2.5 py-1.5 text-sm",
+  md: "px-3.5 py-2 text-sm",
+  lg: "px-4 py-2.5 text-base",
+};
+
+export const Button = forwardRef(function Button(
+  { className, variant = "default", size = "md", type = "button", ...props },
+  ref
+) {
+  const v = variants[variant] || variants.default;
+  const s = sizes[size] || sizes.md;
+  return (
+    <button
+      ref={ref}
+      type={type}
+      className={cx(base, v, s, className)}
+      {...props}
+    />
+  );
+});
+
+export default Button;
