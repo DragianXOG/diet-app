@@ -1,6 +1,6 @@
 # app/api/auth.py
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, EmailStr, constr, field_validator, FieldValidationInfo
+from pydantic import BaseModel, EmailStr, constr
 from sqlmodel import Session, select
 
 from ..core.db import get_session
@@ -12,66 +12,12 @@ from ..core.security import (
 )
 from ..models import User
 
-# --- Password policy (server-side) ---
-import re as _re
-
-PASSWORD_REQUIREMENTS = [
-    "At least 12 characters",
-    "Contains a lowercase letter",
-    "Contains an uppercase letter",
-    "Contains a number",
-    "Contains a symbol",
-    "No character repeated 3+ times in a row",
-    "Does not include your email name",
-    "Not a common password",
-]
-
-_COMMON_WEAK = {
-    "password","123456","qwerty","letmein","111111","iloveyou","admin",
-    "welcome","abc123","monkey","dragon","123456789","12345678","000000"
-}
-
-def _password_issues(pw: str, email: str = "") -> list[str]:
-    pw = pw or ""
-    issues: list[str] = []
-    if len(pw) < 12:
-        issues.append("At least 12 characters")
-    if not _re.search(r"[a-z]", pw):
-        issues.append("Contains a lowercase letter")
-    if not _re.search(r"[A-Z]", pw):
-        issues.append("Contains an uppercase letter")
-    if not _re.search(r"\d", pw):
-        issues.append("Contains a number")
-    if not _re.search(r"[^A-Za-z0-9]", pw):
-        issues.append("Contains a symbol")
-    if _re.search(r"(.)\1\1", pw):
-        issues.append("No character repeated 3+ times in a row")
-    local = (email or "").split("@")[0].lower() if email else ""
-    if local and local in pw.lower():
-        issues.append("Does not include your email name")
-    if pw.lower() in _COMMON_WEAK:
-        issues.append("Not a common password")
-    return issues
-
-
 router = APIRouter()
 
 # ---- Schemas ----
 class SignupIn(BaseModel):
     email: EmailStr
-    password: constr(min_length=12)
-    @field_validator('password')
-    @classmethod
-    def _strong_pw(cls, v: str, info: FieldValidationInfo):
-        email = ''
-        try:
-            email = str(getattr(info, 'data', {}).get('email', ''))
-        except Exception:
-            pass
-        issues = _password_issues(v, email)
-        if issues:
-            raise ValueError('weak_password: ' + '; '.join(issues))
-        return v
+    password: constr(min_length=8)
 
 class LoginIn(BaseModel):
     email: EmailStr
