@@ -13,26 +13,6 @@ from datetime import date as _date, time as _time, timedelta as _td, datetime as
 import os, json
 
 router = APIRouter()
-# --- Fallback IntakeIn definition (ensures it's available before use) ---
-try:
-    IntakeIn
-except NameError:
-    class IntakeIn(BaseModel):
-        food_notes: Optional[str] = None
-        workout_notes: Optional[str] = None
-        name: Optional[str] = None
-        age: Optional[int] = None
-        sex: Optional[str] = None
-        height_in: Optional[int] = None
-        weight_lb: Optional[int] = None
-        diabetic: Optional[bool] = None
-        conditions: Optional[str] = None
-        meds: Optional[str] = None
-        goals: Optional[str] = None
-        zip: Optional[str] = None
-        gym: Optional[str] = None
-# --- end fallback ---
-
 
 # ---------- Meals ----------
 class MealItemIn(BaseModel):
