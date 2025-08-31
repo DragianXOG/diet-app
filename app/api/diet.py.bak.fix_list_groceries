@@ -102,34 +102,10 @@ def add_grocery(payload: GroceryIn, user: User = Depends(get_current_user), sess
     finally:
         session.exec(text("RESET app.user_id"))
 
-
 @router.get("/groceries")
 def list_groceries(
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-    only_open: bool = Query(True),
-):
-    # Set RLS context
-    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
-    try:
-        q = select(GroceryItem).where(GroceryItem.user_id == user.id)
-        if only_open:
-            q = q.where(GroceryItem.purchased == False)  # noqa: E712
-        rows = session.exec(q.order_by(GroceryItem.created_at.desc())).all()
-        # Include optional store/price fields if columns exist (safe via getattr)
-        return [{
-            "id": r.id,
-            "name": r.name,
-            "quantity": r.quantity,
-            "unit": r.unit,
-            "purchased": r.purchased,
-            "store": getattr(r, "store", None),
-            "unit_price": getattr(r, "unit_price", None),
-            "total_price": getattr(r, "total_price", None),
-            "created_at": r.created_at.isoformat()
-        } for r in rows]
-    finally:
-        session.exec(text("RESET app.user_id"))
+
+
 
 @router.patch("/groceries/{item_id}")
 def update_grocery(item_id: int, payload: GroceryUpdate, user: User = Depends(get_current_user), session: Session = Depends(get_session)):

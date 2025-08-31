@@ -102,9 +102,71 @@ def add_grocery(payload: GroceryIn, user: User = Depends(get_current_user), sess
     finally:
         session.exec(text("RESET app.user_id"))
 
-
 @router.get("/groceries")
 def list_groceries(
+
+
+@router.get("/groceries/price_preview")
+def price_preview(
+    prefer: Optional[str] = Query(None, description="Preferred store like ALDI/WALMART/COSTCO; inferred from intake if omitted."),
+    user: User = Depends(get_current_user),
+    session: Session = Depends(get_session),
+):
+    """
+    Compute a price+store plan for the current unpurchased grocery items without persisting to DB.
+    Uses local price catalog + simple preference inference from intake notes/goals.
+    """
+    # RLS
+    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
+    try:
+        # Infer preferred store from intake if not provided
+        if not prefer:
+            intake = session.exec(
+                select(Intake).where(Intake.user_id == user.id).order_by(Intake.id.desc()).limit(1)
+            ).first()
+            if intake:
+                notes = ((getattr(intake,"food_notes", "") or "") + " " + (getattr(intake,"goals","") or "")).lower()
+                if "aldi" in notes: prefer = "ALDI"
+                elif "walmart" in notes: prefer = "WALMART"
+                elif "costco" in notes: prefer = "COSTCO"
+        prefer = (prefer or "ALDI").upper()
+
+        # Load open items
+        rows = session.exec(
+            select(GroceryItem).where(GroceryItem.user_id == user.id).where((GroceryItem.purchased == False) | (GroceryItem.purchased == None)).order_by(GroceryItem.created_at.asc())
+        ).all()
+
+        # Use helpers if present; else basic fallback
+        def _fallback_pick_store(name: str, prefer_store: Optional[str]):
+            try:
+                return _pick_store(name, prefer_store)
+            except NameError:
+                # basic fallback: prefer store, no price
+                return ((prefer_store or "ALDI"), None)
+
+        items=[]
+        store_totals={}
+        for r in rows:
+            store, unit = _fallback_pick_store(r.name, prefer)
+            qty = float(r.quantity) if r.quantity is not None else 1.0
+            total = (unit * qty) if unit is not None else None
+            items.append({
+                "id": r.id, "name": r.name, "quantity": r.quantity, "unit": r.unit,
+                "store": store, "unit_price": unit, "total_price": (round(float(total),2) if total is not None else None)
+            })
+            if total is not None:
+                store_totals[store] = store_totals.get(store, 0.0) + float(total)
+
+        grand = sum(store_totals.values()) if store_totals else 0.0
+        return {
+            "items": items,
+            "store_totals": {k: round(v,2) for k,v in store_totals.items()},
+            "grand_total": round(grand, 2),
+            "preferred_store": prefer
+        }
+    finally:
+        session.exec(text("RESET app.user_id"))
+
     user: User = Depends(get_current_user),
     session: Session = Depends(get_session),
     only_open: bool = Query(True),
@@ -116,18 +178,7 @@ def list_groceries(
         if only_open:
             q = q.where(GroceryItem.purchased == False)  # noqa: E712
         rows = session.exec(q.order_by(GroceryItem.created_at.desc())).all()
-        # Include optional store/price fields if columns exist (safe via getattr)
-        return [{
-            "id": r.id,
-            "name": r.name,
-            "quantity": r.quantity,
-            "unit": r.unit,
-            "purchased": r.purchased,
-            "store": getattr(r, "store", None),
-            "unit_price": getattr(r, "unit_price", None),
-            "total_price": getattr(r, "total_price", None),
-            "created_at": r.created_at.isoformat()
-        } for r in rows]
+        return [{"id": r.id, "name": r.name, "quantity": r.quantity, "unit": r.unit, "purchased": r.purchased, "store": getattr(r, "store", None), "unit_price": getattr(r, "unit_price", None), "total_price": getattr(r, "total_price", None), "created_at": r.created_at.isoformat()} for r in rows]
     finally:
         session.exec(text("RESET app.user_id"))
 
@@ -857,65 +908,5 @@ def price_assign(
         # Round to 2 decimals for output
         store_totals = {k: round(v, 2) for k,v in store_totals.items()}
         return {"items_priced": items_priced, "store_totals": store_totals, "grand_total": round(grand, 2)}
-    finally:
-        session.exec(text("RESET app.user_id"))
-
-
-
-@router.get("/groceries/price_preview")
-def price_preview(
-    prefer: Optional[str] = Query(None, description="Preferred store like ALDI/WALMART/COSTCO; inferred from intake if omitted."),
-    user: User = Depends(get_current_user),
-    session: Session = Depends(get_session),
-):
-    """
-    Compute a price+store plan for current unpurchased grocery items (no DB writes).
-    Uses local price catalog + simple preference inference from intake notes/goals.
-    """
-    # RLS
-    session.exec(text("SET app.user_id = :uid").bindparams(uid=user.id))
-    try:
-        # Prefer store inference
-        if not prefer:
-            intake = session.exec(
-                select(Intake).where(Intake.user_id == user.id).order_by(Intake.id.desc()).limit(1)
-            ).first()
-            if intake:
-                notes = ((getattr(intake,"food_notes","") or "") + " " + (getattr(intake,"goals","") or "")).lower()
-                if "aldi" in notes: prefer = "ALDI"
-                elif "walmart" in notes: prefer = "WALMART"
-                elif "costco" in notes: prefer = "COSTCO"
-        prefer = (prefer or "ALDI").upper()
-
-        rows = session.exec(
-            select(GroceryItem).where(GroceryItem.user_id == user.id).where((GroceryItem.purchased == False) | (GroceryItem.purchased == None)).order_by(GroceryItem.created_at.asc())
-        ).all()
-
-        # Use existing _pick_store helper if present; else fallback
-        def _fallback_pick_store(name: str, prefer_store: Optional[str]):
-            try:
-                return _pick_store(name, prefer_store)
-            except NameError:
-                return ((prefer_store or "ALDI"), None)
-
-        items=[]; store_totals={}
-        for r in rows:
-            store, unit = _fallback_pick_store(r.name, prefer)
-            qty = float(r.quantity) if r.quantity is not None else 1.0
-            total = (unit * qty) if unit is not None else None
-            items.append({
-                "id": r.id, "name": r.name, "quantity": r.quantity, "unit": r.unit,
-                "store": store, "unit_price": unit, "total_price": (round(float(total),2) if total is not None else None)
-            })
-            if total is not None:
-                store_totals[store] = store_totals.get(store, 0.0) + float(total)
-
-        grand = sum(store_totals.values()) if store_totals else 0.0
-        return {
-            "items": items,
-            "store_totals": {k: round(v,2) for k,v in store_totals.items()},
-            "grand_total": round(grand, 2),
-            "preferred_store": prefer
-        }
     finally:
         session.exec(text("RESET app.user_id"))
