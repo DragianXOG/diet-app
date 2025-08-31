@@ -1,3 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(pwd)"
+API_FILE="app/api/diet.py"
+BACKUP="${API_FILE}.bak.$(date +%s)"
+SERVICE_NAME="${SERVICE_NAME:-diet-app.service}"
+
+[[ -f "$API_FILE" ]] || { echo "❌ $API_FILE not found. Run from repo root."; exit 1; }
+
+cp -a "$API_FILE" "$BACKUP"
+echo "🗂  Backup -> $BACKUP"
+
+cat > "$API_FILE" <<'PY'
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
@@ -734,3 +748,26 @@ def price_assign(
             meta = _persist_prices_fallback(user.id, items)
             updated = len(items)
         return {"updated": updated, "totals": prev["totals"], "grand_total": prev["grand_total"], "persist": meta}
+PY
+
+# Import test
+PY_BIN="$ROOT/.venv/bin/python"; [[ -x "$PY_BIN" ]] || PY_BIN="$(command -v python3)"
+echo "🔎 Import test ..."
+PYTHONPATH="$ROOT" "$PY_BIN" - <<'PY'
+import importlib
+m = importlib.import_module("app.main")
+print("ok", type(m.app).__name__)
+PY
+
+# Restart service (if present)
+if systemctl --user list-units | grep -q "$SERVICE_NAME"; then
+  echo "🔁 Restarting $SERVICE_NAME ..."
+  systemctl --user daemon-reload || true
+  systemctl --user restart "$SERVICE_NAME" || true
+  sleep 1
+  systemctl --user status "$SERVICE_NAME" -n 40 --no-pager || true
+else
+  echo "ℹ️  User service $SERVICE_NAME not found. Skipping restart."
+fi
+
+echo "✅ diet.py replaced (audit columns handled) and import OK."

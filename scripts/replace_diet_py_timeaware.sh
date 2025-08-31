@@ -1,3 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(pwd)"
+API_FILE="app/api/diet.py"
+BACKUP="${API_FILE}.bak.$(date +%s)"
+SERVICE_NAME="${SERVICE_NAME:-diet-app.service}"
+
+[[ -f "$API_FILE" ]] || { echo "❌ $API_FILE not found. Run from your repo root."; exit 1; }
+
+cp -a "$API_FILE" "$BACKUP"
+echo "🗂  Backup -> $BACKUP"
+
+cat > "$API_FILE" <<'PY'
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
@@ -11,12 +25,12 @@ import re
 from pydantic import BaseModel
 
 from sqlmodel import Session, select
-from sqlalchemy import text, func, inspect as sqla_inspect
+from sqlalchemy import text, func
 from sqlalchemy.exc import OperationalError
 
 from app.core.db import get_session
 from app.core.security import get_current_user
-from app.models import User, Intake, Meal, MealItem  # NOTE: avoid GroceryItem mapping to bypass missing cols
+from app.models import User, Intake, Meal, MealItem, GroceryItem
 
 router = APIRouter()
 
@@ -40,7 +54,7 @@ def _set_rls(session: Session, uid: int) -> None:
         if session.info.get("_rls_uid") == uid and session.info.get("_rls_depth", 0) > 0:
             return
         conn = session.connection()  # pin the connection
-        conn.execute(text("select set_config('app.user_id', :val, false)").bindparams(val=str(uid)))
+        conn.execute(text("select set_config('app.user_id', :val, false)"), {"val": str(uid)})
         session.info["_rls_uid"] = uid
     except OperationalError:
         pass
@@ -148,13 +162,6 @@ def _safe_set(obj: Any, field: str, value: Any) -> None:
 def _ensure_dir(p: Path) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
 
-def _table_cols(session: Session, table: str) -> set[str]:
-    try:
-        insp = sqla_inspect(session.connection())
-        return {c["name"] for c in insp.get_columns(table)}
-    except Exception:
-        return set()
-
 # ---- Time-window helper: supports either Meal.date (date) or Meal.eaten_at (datetime)
 def _meal_window_filters(start: Optional[date], end: Optional[date]) -> List[Any]:
     filters: List[Any] = []
@@ -215,8 +222,8 @@ def rationalize_intake(
 ):
     with _rls(session, user.id):
         intake = session.exec(select(Intake).where(Intake.user_id == user.id)).first()
-        notes = (getattr(intake, "food_notes", "")) + " " + (getattr(intake, "workout_notes", "") or "")
-        notes_l = (notes or "").lower()
+        notes = (getattr(intake, "food_notes", "") or "") + " " + (getattr(intake, "workout_notes", "") or "")
+        notes_l = notes.lower()
 
         low_carb = any(k in notes_l for k in ("keto", "low carb", "lower carb"))
         if_2 = any(k in notes_l for k in ("if 2/day", "2-meal", "two meals", "16:8"))
@@ -425,13 +432,7 @@ def get_plan(
         return json.load(f)
 
 # ------------------------------------------------------------------------------
-# Groceries (RAW SQL; never reference missing pricing columns)
-#   - add_grocery
-#   - list_groceries
-#   - toggle_purchased
-#   - sync_from_meals
-#   - price_preview
-#   - price_assign (DB persist if possible, else file fallback)
+# Groceries: add one, list, toggle purchased, sync from meals, pricing
 # ------------------------------------------------------------------------------
 class GroceryCreate(BaseModel):
     name: str
@@ -445,23 +446,16 @@ def add_grocery(
     user: User = Depends(get_current_user),
 ):
     with _rls(session, user.id):
-        cols = _table_cols(session, "grocery_items")
-        if {"created_at", "updated_at"} <= cols:
-            stmt = text("""
-                INSERT INTO grocery_items (user_id, name, quantity, unit, purchased, created_at, updated_at)
-                VALUES (:uid, :name, :qty, NULL, :pfalse, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                RETURNING id, user_id, name, quantity, unit, purchased
-            """).bindparams(uid=user.id, name=item.name, qty=float(item.quantity or 1.0), pfalse=False)
-        else:
-            stmt = text("""
-                INSERT INTO grocery_items (user_id, name, quantity, unit, purchased)
-                VALUES (:uid, :name, :qty, NULL, :pfalse)
-                RETURNING id, user_id, name, quantity, unit, purchased
-            """).bindparams(uid=user.id, name=item.name, qty=float(item.quantity or 1.0), pfalse=False)
-        res = session.exec(stmt)
+        gi = GroceryItem(user_id=user.id, name=item.name)  # type: ignore[call-arg]
+        if hasattr(gi, "quantity"):
+            try:
+                setattr(gi, "quantity", float(item.quantity or 1.0))  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        session.add(gi)
         session.commit()
-        row = res.mappings().first()
-        return dict(row) if row else {"ok": True}
+        session.refresh(gi)
+        return gi
 
 @router.get("/groceries")
 def list_groceries(
@@ -471,17 +465,11 @@ def list_groceries(
     only_open: bool = Query(False, description="Show only items not yet purchased"),
 ):
     with _rls(session, user.id):
-        sql = """
-            SELECT id, user_id, name, quantity, unit, purchased
-            FROM grocery_items
-            WHERE user_id = :uid
-        """
+        q = select(GroceryItem).where(GroceryItem.user_id == user.id)
         if only_open:
-            sql += " AND purchased = :pfalse"
-        sql += " ORDER BY id"
-        stmt = text(sql).bindparams(uid=user.id, pfalse=False)
-        rows = session.exec(stmt).mappings().all()
-        return [dict(r) for r in rows]
+            q = q.where(GroceryItem.purchased == False)  # noqa: E712
+        items = session.exec(q).all()
+        return items
 
 @router.patch("/groceries/{item_id}")
 def toggle_grocery_purchased(
@@ -491,24 +479,15 @@ def toggle_grocery_purchased(
     user: User = Depends(get_current_user),
 ):
     with _rls(session, user.id):
-        cols = _table_cols(session, "grocery_items")
-        sel = text("SELECT purchased FROM grocery_items WHERE id=:id AND user_id=:uid").bindparams(id=item_id, uid=user.id)
-        row = session.exec(sel).first()
-        if row is None:
+        gi = session.get(GroceryItem, item_id)
+        if not gi or getattr(gi, "user_id", None) != user.id:
             raise HTTPException(status_code=404, detail="Grocery item not found")
-        current = bool(row[0])
-        if "updated_at" in cols:
-            upd = text("UPDATE grocery_items SET purchased=:p, updated_at=CURRENT_TIMESTAMP WHERE id=:id AND user_id=:uid") \
-                .bindparams(p=not current, id=item_id, uid=user.id)
-        else:
-            upd = text("UPDATE grocery_items SET purchased=:p WHERE id=:id AND user_id=:uid") \
-                .bindparams(p=not current, id=item_id, uid=user.id)
-        session.exec(upd)
+        current = bool(getattr(gi, "purchased", False))
+        _safe_set(gi, "purchased", not current)
+        session.add(gi)
         session.commit()
-        sel2 = text("SELECT id, user_id, name, quantity, unit, purchased FROM grocery_items WHERE id=:id AND user_id=:uid") \
-            .bindparams(id=item_id, uid=user.id)
-        row2 = session.exec(sel2).mappings().first()
-        return dict(row2) if row2 else {"id": item_id, "purchased": not current}
+        session.refresh(gi)
+        return gi
 
 @router.post("/groceries/sync_from_meals")
 def sync_groceries_from_meals(
@@ -525,19 +504,15 @@ def sync_groceries_from_meals(
     ),
 ):
     with _rls(session, user.id):
-        cols = _table_cols(session, "grocery_items")
-
         if clear_existing:
-            if "updated_at" in cols:
-                del_stmt = text("DELETE FROM grocery_items WHERE user_id=:uid AND purchased=:pfalse") \
-                    .bindparams(uid=user.id, pfalse=False)
-            else:
-                del_stmt = text("DELETE FROM grocery_items WHERE user_id=:uid AND purchased=:pfalse") \
-                    .bindparams(uid=user.id, pfalse=False)
-            session.exec(del_stmt)
+            open_items = session.exec(
+                select(GroceryItem).where(GroceryItem.user_id == user.id, GroceryItem.purchased == False)  # noqa: E712
+            ).all()
+            for gi in open_items:
+                session.delete(gi)
             session.commit()
 
-        # Query meals in window (time-aware)
+        # Pull meals in window using time-aware filters
         q = select(Meal).where(Meal.user_id == user.id)
         for cond in _meal_window_filters(start, end):
             q = q.where(cond)
@@ -569,13 +544,13 @@ def sync_groceries_from_meals(
                 cur += timedelta(days=1)
             if persist:
                 session.commit()
-            # Re-query after seeding
+
+            # Re-query with time-aware window
             q = select(Meal).where(Meal.user_id == user.id)
             for cond in _meal_window_filters(start, end):
                 q = q.where(cond)
             meals = session.exec(q).all()
 
-        # Aggregate ingredient counts
         name_counts: Dict[str, float] = {}
         for m in meals:
             mis = session.exec(select(MealItem).where(MealItem.meal_id == m.id)).all()
@@ -601,43 +576,28 @@ def sync_groceries_from_meals(
         created = 0
         if persist:
             for nm, qty in name_counts.items():
-                sel = text("""
-                    SELECT id, quantity
-                    FROM grocery_items
-                    WHERE user_id=:uid AND name=:nm AND purchased=:pfalse
-                    LIMIT 1
-                """).bindparams(uid=user.id, nm=nm, pfalse=False)
-                row = session.exec(sel).mappings().first()
-                if row:
-                    if "updated_at" in cols:
-                        upd = text("""
-                            UPDATE grocery_items
-                            SET quantity = COALESCE(quantity,0) + :add,
-                                updated_at = CURRENT_TIMESTAMP
-                            WHERE id=:id
-                        """).bindparams(add=float(qty), id=row["id"])
-                    else:
-                        upd = text("UPDATE grocery_items SET quantity = COALESCE(quantity,0) + :add WHERE id=:id") \
-                            .bindparams(add=float(qty), id=row["id"])
-                    session.exec(upd)
-                else:
-                    if {"created_at", "updated_at"} <= cols:
-                        ins = text("""
-                            INSERT INTO grocery_items (user_id, name, quantity, unit, purchased, created_at, updated_at)
-                            VALUES (:uid, :nm, :qty, NULL, :pfalse, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """).bindparams(uid=user.id, nm=nm, qty=float(qty), pfalse=False)
-                    elif "created_at" in cols:  # rare case: only created_at enforced
-                        ins = text("""
-                            INSERT INTO grocery_items (user_id, name, quantity, unit, purchased, created_at)
-                            VALUES (:uid, :nm, :qty, NULL, :pfalse, CURRENT_TIMESTAMP)
-                        """).bindparams(uid=user.id, nm=nm, qty=float(qty), pfalse=False)
-                    else:
-                        ins = text("""
-                            INSERT INTO grocery_items (user_id, name, quantity, unit, purchased)
-                            VALUES (:uid, :nm, :qty, NULL, :pfalse)
-                        """).bindparams(uid=user.id, nm=nm, qty=float(qty), pfalse=False)
-                    session.exec(ins)
-                    created += 1
+                existing = session.exec(
+                    select(GroceryItem).where(
+                        GroceryItem.user_id == user.id,
+                        GroceryItem.name == nm,
+                        GroceryItem.purchased == False,  # noqa: E712
+                    )
+                ).first()
+                if existing:
+                    if hasattr(existing, "quantity"):
+                        try:
+                            existing.quantity = float(getattr(existing, "quantity", 0.0) or 0.0) + float(qty)  # type: ignore[attr-defined]
+                        except Exception:
+                            pass
+                    continue
+                gi = GroceryItem(user_id=user.id, name=nm)  # type: ignore[call-arg]
+                if hasattr(gi, "quantity"):
+                    try:
+                        gi.quantity = float(qty)  # type: ignore[attr-defined]
+                    except Exception:
+                        pass
+                session.add(gi)
+                created += 1
             session.commit()
 
         return {"created": created, "count": len(name_counts), "window": {"start": str(start), "end": str(end)}}
@@ -649,42 +609,39 @@ def price_preview(
     user: User = Depends(get_current_user),
 ):
     with _rls(session, user.id):
-        sel = text("""
-            SELECT id, name, quantity
-            FROM grocery_items
-            WHERE user_id=:uid AND purchased=:pfalse
-            ORDER BY id
-        """).bindparams(uid=user.id, pfalse=False)
-        rows = session.exec(sel).mappings().all()
-
+        items = session.exec(
+            select(GroceryItem).where(GroceryItem.user_id == user.id, GroceryItem.purchased == False)  # noqa: E712
+        ).all()
         intake = session.exec(select(Intake).where(Intake.user_id == user.id)).first()
         prefer = _prefer_store_from_intake(intake)
 
         preview_items: List[Dict[str, Any]] = []
         totals = {s: 0.0 for s in _STORES}
 
-        for r in rows:
-            name = r["name"]
-            qty = float(r.get("quantity") or 1.0)
+        for it in items:
+            name = getattr(it, "name", "item")
             price_map = _price_map_for_item(name)
             store = prefer or min(price_map, key=price_map.get)
             unit_price = float(price_map[store])
+
+            qty = 1.0
+            for field in ("quantity", "qty", "count"):
+                if hasattr(it, field):
+                    try:
+                        qty = float(getattr(it, field) or 1.0)
+                    except Exception:
+                        pass
+                    break
+
             total_price = round(unit_price * max(1.0, qty), 2)
             totals[store] += total_price
 
             preview_items.append(
-                {"id": r["id"], "name": name, "suggested_store": store, "unit_price": unit_price, "total_price": total_price}
+                {"id": it.id, "name": name, "suggested_store": store, "unit_price": unit_price, "total_price": total_price}
             )
 
         grand_total = round(sum(totals.values()), 2)
         return {"items": preview_items, "totals": {k: round(v, 2) for k, v in totals.items()}, "grand_total": grand_total}
-
-def _persist_prices_fallback(user_id: int, items: List[Dict[str, Any]]) -> Dict[str, Any]:
-    path = Path(f"data/prices/user-{user_id}.json")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump({"items": items, "saved_at": datetime.utcnow().isoformat()}, f, ensure_ascii=False, indent=2)
-    return {"backend": "file", "path": str(path)}
 
 @router.post("/groceries/price_assign")
 def price_assign(
@@ -694,43 +651,37 @@ def price_assign(
 ):
     with _rls(session, user.id):
         prev = price_preview(session=session, user=user)
-        items: List[Dict[str, Any]] = prev["items"]
-        meta: Dict[str, Any] = {"backend": "db"}
         updated = 0
-        try:
-            cols = _table_cols(session, "grocery_items")
-            if "updated_at" in cols:
-                for stub in items:
-                    upd = text("""
-                        UPDATE grocery_items
-                        SET store=:s, unit_price=:u, total_price=:t, updated_at=CURRENT_TIMESTAMP
-                        WHERE id=:id AND user_id=:uid
-                    """).bindparams(
-                        s=stub["suggested_store"],
-                        u=float(stub["unit_price"]),
-                        t=float(stub["total_price"]),
-                        id=stub["id"],
-                        uid=user.id,
-                    )
-                    session.exec(upd)
-                    updated += 1
-            else:
-                for stub in items:
-                    upd = text("""
-                        UPDATE grocery_items
-                        SET store=:s, unit_price=:u, total_price=:t
-                        WHERE id=:id AND user_id=:uid
-                    """).bindparams(
-                        s=stub["suggested_store"],
-                        u=float(stub["unit_price"]),
-                        t=float(stub["total_price"]),
-                        id=stub["id"],
-                        uid=user.id,
-                    )
-                    session.exec(upd)
-                    updated += 1
-            session.commit()
-        except Exception:
-            meta = _persist_prices_fallback(user.id, items)
-            updated = len(items)
-        return {"updated": updated, "totals": prev["totals"], "grand_total": prev["grand_total"], "persist": meta}
+        for stub in prev["items"]:
+            gi = session.get(GroceryItem, stub["id"])
+            if not gi:
+                continue
+            setattr(gi, "store", stub["suggested_store"])
+            setattr(gi, "unit_price", float(stub["unit_price"]))
+            setattr(gi, "total_price", float(stub["total_price"]))
+            updated += 1
+        session.commit()
+        return {"updated": updated, "totals": prev["totals"], "grand_total": prev["grand_total"]}
+PY
+
+# Import test
+PY_BIN="$ROOT/.venv/bin/python"; [[ -x "$PY_BIN" ]] || PY_BIN="$(command -v python3)"
+echo "🔎 Import test ..."
+PYTHONPATH="$ROOT" "$PY_BIN" - <<'PY'
+import importlib
+m = importlib.import_module("app.main")
+print("ok", type(m.app).__name__)
+PY
+
+# Restart service (if present)
+if systemctl --user list-units | grep -q "$SERVICE_NAME"; then
+  echo "🔁 Restarting $SERVICE_NAME ..."
+  systemctl --user daemon-reload || true
+  systemctl --user restart "$SERVICE_NAME" || true
+  sleep 1
+  systemctl --user status "$SERVICE_NAME" -n 40 --no-pager || true
+else
+  echo "ℹ️  User service $SERVICE_NAME not found. Skipping restart."
+fi
+
+echo "✅ diet.py replaced (time-aware filters) and import OK."
