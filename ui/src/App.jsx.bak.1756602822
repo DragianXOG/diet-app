@@ -880,6 +880,7 @@ return (
   );
 }
 
+
 function Workouts() {
   const [note, setNote] = useState("");
   return (
@@ -898,6 +899,7 @@ function Workouts() {
     </Card>
   );
 }
+
 
 // Root App UI
 export default function App() {
@@ -926,6 +928,7 @@ export default function App() {
       <main className="w-full px-6 py-6 md:py-8 lg:py-10 grid gap-5 md:gap-8 lg:gap-10">
         <Tabs value={active} onValueChange={setActive} className="w-full">
           <TabsList className="flex flex-wrap gap-2">
+            <TabsTrigger value="intake" className="gap-2"><Activity className="w-4 h-4"/> Intake</TabsTrigger>
             <TabsTrigger value="meal" className="gap-2"><Utensils className="w-4 h-4"/> Meal Plan</TabsTrigger>
             <TabsTrigger value="about" className="gap-2"><FileJson className="w-4 h-4"/> About You</TabsTrigger>
             <TabsTrigger value="groceries" className="gap-2"><ListChecks className="w-4 h-4"/> Groceries</TabsTrigger>
@@ -933,6 +936,7 @@ export default function App() {
             <TabsTrigger value="trackers" className="gap-2"><BarChart3 className="w-4 h-4"/> Trackers</TabsTrigger>
           </TabsList>
 
+          <TabsContent value="intake"><Intake api={api}/></TabsContent>
           <TabsContent value="meal"><MealPlan api={api}/></TabsContent>
           <TabsContent value="about"><AboutYou api={api}/></TabsContent>
           <TabsContent value="groceries"><GroceryList api={api}/></TabsContent>
