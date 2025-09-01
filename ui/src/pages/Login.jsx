@@ -39,13 +39,14 @@ async function tryLogin(base, email, password) {
 
 async function hasIntake(base, tok) {
   try {
-    const r = await fetch(`${base}/api/v1/intake`, { headers: { Authorization: `Bearer ${tok}` }});
+    const r = await fetch(`${base}/api/v1/intake_open`);
     if (!r.ok) return false;
     const j = await r.json().catch(()=>null);
     return !!j;
   } catch { return false; }
 }
 
+const tok = "";
 export default function Login() {
   const nav = useNavigate();
   const [email, setEmail] = useState("");
@@ -55,7 +56,6 @@ export default function Login() {
 
   // If already authed, skip to intake/app
   useEffect(() => {
-    const tok = localStorage.getItem("diet.app.token") || localStorage.getItem("diet.token");
     if (!tok) return;
     (async () => {
       const base = getBase();

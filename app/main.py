@@ -1,5 +1,7 @@
 import time
 from fastapi import FastAPI
+from app.core.db import engine
+from sqlmodel import SQLModel
 
 # === Postgres helper (optional) ===
 import os
@@ -20,7 +22,7 @@ def _pg_conn():
 def _pg_set_user(conn, user_id: int):
     if not conn: return
     with conn.cursor() as cur:
-        cur.execute("SET app.user_id = %s", (user_id,))
+        cur.execute("SELECT set_config('app.user_id', %s::text, false)", (user_id,))
 
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
@@ -38,24 +40,18 @@ ALLOW_ORIGINS = [
 
 app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
 
+
+# --- Unified DEV CORS (localhost + LAN) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOW_ORIGINS,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.40\.184)(:\d+)?$",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=False,
 )
-
+# --- /Unified DEV CORS ---
 # CORS
 allow_origins = ["*"] if settings.CORS_ORIGINS == ["*"] else settings.CORS_ORIGINS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://192.168.40.184:8080","http://localhost:8080","http://127.0.0.1:8080","http://localhost:5173","http://127.0.0.1:5173"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-    allow_credentials=False,
-)
-
 @app.on_event("startup")
 def _startup():
     init_db()
@@ -278,6 +274,7 @@ from fastapi import Depends
 # If your app provides get_current_user (JWT), use it; else allow None
 try:
     get_current_user
+
 except NameError:
     def get_current_user():
         return None
@@ -295,6 +292,8 @@ class IntakeIn(_BaseModel):
     zip: _Optional[str] = None
     gym: _Optional[str] = None
     email: _Optional[str] = None
+    food_notes: _Optional[str] = None
+    workout_notes: _Optional[str] = None
 
 _DATA_DIR = _Path(__file__).resolve().parent.parent / "data"
 _DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -302,19 +301,44 @@ _INTAKE_PATH = _DATA_DIR / "intake.json"
 
 @app.post("/api/v1/intake")
 @app.post("/intake")
-async def save_intake(body: IntakeIn, current_user: dict | None = Depends(get_current_user)):
+
+def _dev_uid_or_none():
     try:
-        # Prefer Postgres + RLS if configured and user is authenticated
+        if _DEV_NO_AUTH:  # type: ignore[name-defined]
+            return int(_dev_user()["id"])  # type: ignore[name-defined]
+    except Exception:
+        pass
+    return None
+
+
+def _normalize_intake(body: IntakeIn):  # type: ignore[name-defined]
+    # Convert empty strings to None and drop unset fields
+    raw = body.model_dump(exclude_unset=True)
+    return {k: (v if v not in ("", None) else None) for k, v in raw.items()}
+
+async def save_intake(body: IntakeIn, current_user: dict | None = None):
+    try:
+        # Prefer Postgres + RLS if configured; in dev/no-auth use a synthetic user id
         conn = _pg_conn()
-        if conn is not None and current_user and current_user.get('id'):
-            _pg_set_user(conn, int(current_user['id']))
-            fields = body.model_dump(exclude_none=True)
-            fields['user_id'] = int(current_user['id'])
-            cols = ','.join(fields.keys())
-            placeholders = ','.join(['%s']*len(fields))
+        uid = None
+        if conn is not None:
+            if current_user and current_user.get('id'):
+                uid = int(current_user['id'])
+            else:
+                uid = _dev_uid_or_none()
+
+        if conn is not None and uid is not None:
+            _pg_set_user(conn, uid)
+            fields = _normalize_intake(body)
+            fields['user_id'] = uid
+            cols = ",".join(fields.keys())
+            placeholders = ",".join(["%s"] * len(fields))
             values = list(fields.values())
             with conn.cursor() as cur:
-                cur.execute(f"INSERT INTO life.intakes ({cols}) VALUES ({placeholders}) RETURNING id", values)
+                cur.execute(
+                    f"""INSERT INTO life.intakes ({cols}) VALUES ({placeholders}) RETURNING id""",
+                    values,
+                )
                 new_id = cur.fetchone()[0]
             return {"ok": True, "db": "postgres", "id": new_id}
 
@@ -328,7 +352,7 @@ async def save_intake(body: IntakeIn, current_user: dict | None = Depends(get_cu
         entry = {
             "ts": int(_time.time()),
             "user_id": (current_user.get('id') if current_user else None),
-            **{k: v for k, v in body.model_dump().items() if v is not None}
+            **_normalize_intake(body),
         }
         items.append(entry)
         _INTAKE_PATH.write_text(_json.dumps(items, indent=2))
@@ -336,3 +360,112 @@ async def save_intake(body: IntakeIn, current_user: dict | None = Depends(get_cu
     except Exception as e:
         return _JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 # --- end intake endpoints ---
+# --- DEV CORS (lan + localhost) ---
+from fastapi.middleware.cors import CORSMiddleware
+try:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.40\.184)(:\d+)?$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+except Exception:
+    pass
+# --- /DEV CORS ---
+@app.get("/api/v1/intake")
+@app.get("/intake")
+def get_intake(current_user: dict | None = Depends(get_current_user)):
+    try:
+        # Prefer Postgres + RLS if configured; in dev/no-auth use a synthetic user id
+        conn = _pg_conn()
+        if conn is not None:
+            if current_user and current_user.get('id'):
+                uid = int(current_user['id'])
+            else:
+                uid = _dev_uid_or_none()
+        else:
+            uid = None
+        if conn is not None and uid is not None:
+            _pg_set_user(conn, uid)
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    select id, user_id, name, age, sex, height_in, weight_lb, diabetic,
+       conditions, meds, goals, zip, gym,
+       food_notes, workout_notes,
+       created_at
+                    FROM life.intakes
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC NULLS LAST
+                    LIMIT 1
+                    """,
+                    (uid,),
+                )
+                row = cur.fetchone()
+                if row:
+                    cols = [d.name for d in cur.description]
+                    return dict(zip(cols, row))
+            return {}
+
+        # Fallback to JSON file storage (works without auth/DB)
+        if _INTAKE_PATH.exists():
+            try:
+                items = _json.loads(_INTAKE_PATH.read_text() or "[]")
+            except Exception:
+                items = []
+            uid = current_user.get('id') if current_user else None
+            if uid is not None:
+                items = [it for it in items if it.get("user_id") == uid]
+            if items:
+                return items[-1]
+        return {}
+    except Exception as e:
+        return _JSONResponse({"detail": str(e)}, status_code=500)
+
+# --- DEV NO-AUTH SHIM (LAN-only) ---
+import os as _os
+
+_DEV_NO_AUTH = _os.getenv("DEV_NO_AUTH", "1") == "1"
+
+def _dev_user():
+    return {
+        "id": int(_os.getenv("DEV_USER_ID", "37")),
+        "email": _os.getenv("DEV_USER_EMAIL", "dev@example.com"),
+        "token_version": 0,
+    }
+
+# Override get_current_user in dev mode
+if _DEV_NO_AUTH:
+    def get_current_user():
+        return _dev_user()
+# --- /DEV NO-AUTH SHIM ---
+
+# --- DEV DEPENDENCY OVERRIDE (no-token) ---
+try:
+    # If routes already captured the original dependency, override it here.
+    if _DEV_NO_AUTH:
+        app.dependency_overrides[get_current_user] = lambda: _dev_user()
+except Exception:
+    # If either 'app' or 'get_current_user' isn't defined yet, ignore in dev
+    pass
+# --- /DEV DEPENDENCY OVERRIDE ---
+
+# --- OPEN (NO-AUTH) INTAKE ENDPOINTS FOR DEV ---
+# These call the same logic as the secured endpoints, but don't require auth.
+# Safe because UFW already restricts inbound to 192.168.40.0/24.
+@app.get("/api/v1/intake_open")
+def get_intake_open():
+    # Reuse the secured handler with no current_user
+    return get_intake(current_user=None)  # type: ignore[name-defined]
+
+@app.post("/api/v1/intake_open")
+async def save_intake_open(body: IntakeIn):  # type: ignore[name-defined]
+    # Reuse the secured handler with no current_user
+    return await save_intake(body, current_user=None)  # type: ignore[name-defined]
+# --- /OPEN (NO-AUTH) INTAKE ENDPOINTS FOR DEV ---
+
+
+def _pg_reset_user(conn):
+    with conn.cursor() as cur:
+        cur.execute("SELECT set_config('app.user_id', NULL, true)")

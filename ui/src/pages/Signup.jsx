@@ -5,6 +5,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
+const tok = "";
 export default function Signup() {
   const nav = useNavigate();
   const [email, setEmail] = useState("");

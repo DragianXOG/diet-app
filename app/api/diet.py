@@ -449,15 +449,15 @@ def add_grocery(
         if {"created_at", "updated_at"} <= cols:
             stmt = text("""
                 INSERT INTO grocery_items (user_id, name, quantity, unit, purchased, created_at, updated_at)
-                VALUES (:uid, :name, :qty, NULL, :pfalse, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                VALUES (:uid, :name, :qty, NULL, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 RETURNING id, user_id, name, quantity, unit, purchased
-            """).bindparams(uid=user.id, name=item.name, qty=float(item.quantity or 1.0), pfalse=False)
+            """).bindparams(uid=user.id, name=item.name, qty=float(item.quantity or 1.0))
         else:
             stmt = text("""
                 INSERT INTO grocery_items (user_id, name, quantity, unit, purchased)
-                VALUES (:uid, :name, :qty, NULL, :pfalse)
+                VALUES (:uid, :name, :qty, NULL, false)
                 RETURNING id, user_id, name, quantity, unit, purchased
-            """).bindparams(uid=user.id, name=item.name, qty=float(item.quantity or 1.0), pfalse=False)
+            """).bindparams(uid=user.id, name=item.name, qty=float(item.quantity or 1.0))
         res = session.exec(stmt)
         session.commit()
         row = res.mappings().first()
@@ -477,9 +477,9 @@ def list_groceries(
             WHERE user_id = :uid
         """
         if only_open:
-            sql += " AND purchased = :pfalse"
+            sql += " AND COALESCE(purchased, false) = false"
         sql += " ORDER BY id"
-        stmt = text(sql).bindparams(uid=user.id, pfalse=False)
+        stmt = text(sql).bindparams(uid=user.id)
         rows = session.exec(stmt).mappings().all()
         return [dict(r) for r in rows]
 
@@ -529,11 +529,11 @@ def sync_groceries_from_meals(
 
         if clear_existing:
             if "updated_at" in cols:
-                del_stmt = text("DELETE FROM grocery_items WHERE user_id=:uid AND purchased=:pfalse") \
-                    .bindparams(uid=user.id, pfalse=False)
+                del_stmt = text("DELETE FROM grocery_items WHERE user_id=:uid AND purchased=false") \
+                    .bindparams(uid=user.id)
             else:
-                del_stmt = text("DELETE FROM grocery_items WHERE user_id=:uid AND purchased=:pfalse") \
-                    .bindparams(uid=user.id, pfalse=False)
+                del_stmt = text("DELETE FROM grocery_items WHERE user_id=:uid AND purchased=false") \
+                    .bindparams(uid=user.id)
             session.exec(del_stmt)
             session.commit()
 
@@ -604,9 +604,9 @@ def sync_groceries_from_meals(
                 sel = text("""
                     SELECT id, quantity
                     FROM grocery_items
-                    WHERE user_id=:uid AND name=:nm AND purchased=:pfalse
+                    WHERE user_id=:uid AND name=:nm AND purchased=false
                     LIMIT 1
-                """).bindparams(uid=user.id, nm=nm, pfalse=False)
+                """).bindparams(uid=user.id, nm=nm)
                 row = session.exec(sel).mappings().first()
                 if row:
                     if "updated_at" in cols:
@@ -624,18 +624,18 @@ def sync_groceries_from_meals(
                     if {"created_at", "updated_at"} <= cols:
                         ins = text("""
                             INSERT INTO grocery_items (user_id, name, quantity, unit, purchased, created_at, updated_at)
-                            VALUES (:uid, :nm, :qty, NULL, :pfalse, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """).bindparams(uid=user.id, nm=nm, qty=float(qty), pfalse=False)
+                            VALUES (:uid, :nm, :qty, NULL, false, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        """).bindparams(uid=user.id, nm=nm, qty=float(qty))
                     elif "created_at" in cols:  # rare case: only created_at enforced
                         ins = text("""
                             INSERT INTO grocery_items (user_id, name, quantity, unit, purchased, created_at)
-                            VALUES (:uid, :nm, :qty, NULL, :pfalse, CURRENT_TIMESTAMP)
-                        """).bindparams(uid=user.id, nm=nm, qty=float(qty), pfalse=False)
+                            VALUES (:uid, :nm, :qty, NULL, false, CURRENT_TIMESTAMP)
+                        """).bindparams(uid=user.id, nm=nm, qty=float(qty))
                     else:
                         ins = text("""
                             INSERT INTO grocery_items (user_id, name, quantity, unit, purchased)
-                            VALUES (:uid, :nm, :qty, NULL, :pfalse)
-                        """).bindparams(uid=user.id, nm=nm, qty=float(qty), pfalse=False)
+                            VALUES (:uid, :nm, :qty, NULL, false)
+                        """).bindparams(uid=user.id, nm=nm, qty=float(qty))
                     session.exec(ins)
                     created += 1
             session.commit()
@@ -652,9 +652,9 @@ def price_preview(
         sel = text("""
             SELECT id, name, quantity
             FROM grocery_items
-            WHERE user_id=:uid AND purchased=:pfalse
+            WHERE user_id=:uid AND purchased=false
             ORDER BY id
-        """).bindparams(uid=user.id, pfalse=False)
+        """).bindparams(uid=user.id)
         rows = session.exec(sel).mappings().all()
 
         intake = session.exec(select(Intake).where(Intake.user_id == user.id)).first()

@@ -14,13 +14,9 @@ function getBase() {
     return localStorage.getItem("diet.app.base") || qs || `${location.protocol}//${location.hostname}:8010`;
   } catch { return `${location.protocol}//${location.hostname}:8010`; }
 }
-function getToken() {
-  return localStorage.getItem("diet.app.token") || localStorage.getItem("diet.token") || "";
-}
 async function apiRequest(path, { method = "GET", body, headers } = {}) {
   const base = getBase();
   const url = path.startsWith("http") ? path : `${base.replace(/\/$/, "")}${path.startsWith("/") ? path : "/" + path}`;
-  const tok = getToken();
   const res = await fetch(url, {
     method,
     headers: {
@@ -74,9 +70,7 @@ export default function Intake() {
     (async () => {
       setLoading(true);
       try {
-        const tok = getToken();
-        if (!tok) { nav("/login"); return; }
-        const data = await apiRequest("/api/v1/intake");
+        const data = await apiRequest("/api/v1/intake_open");
         if (data) {
           setForm({
             name: data.name ?? "",
@@ -122,7 +116,7 @@ export default function Intake() {
       payload.height_in = payload.height_in ? Number(payload.height_in) : undefined;
       payload.weight_lb = payload.weight_lb ? Number(payload.weight_lb) : undefined;
 
-      await apiRequest("/api/v1/intake", { method: "POST", body: payload });
+      await apiRequest("/api/v1/intake_open", { method: "POST", body: payload });
       nav("/app");
     } catch (e) {
       setErr(String(e.message || e));

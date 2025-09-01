@@ -9,17 +9,17 @@ function getBase() {
   } catch { return `${location.protocol}//${location.hostname}:8010`; }
 }
 
+const tok = "";
 export default function Landing() {
   const nav = useNavigate();
 
   // If already authed, send user to intake (if missing) or app (if present)
   useEffect(() => {
-    const tok = localStorage.getItem("diet.app.token") || localStorage.getItem("diet.token");
     if (!tok) return; // not signed in -> stay on landing
     (async () => {
       try {
         const base = getBase();
-        const r = await fetch(`${base}/api/v1/intake`, { headers: { Authorization: `Bearer ${tok}` }});
+        const r = await fetch(`${base}/api/v1/intake_open_open_open`);
         let j = null; try { j = await r.json(); } catch {}
         if (r.ok && j) {
           window.location.replace("/app");
