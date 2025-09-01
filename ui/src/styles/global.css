@@ -1,0 +1,4 @@
+:root{--brand-green:#48A860;--brand-purple:#4B0082}
+.brand-primary{background-color:var(--brand-green)!important;color:#fff!important;border-color:transparent!important}
+.brand-primary:hover{background-color:var(--brand-purple)!important;color:#fff!important}
+.brand-badge{background-color:var(--brand-purple)!important;color:#fff!important;border-color:transparent!important}

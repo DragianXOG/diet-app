@@ -14,9 +14,21 @@ class Settings:
     _CORS: str = os.getenv("CORS_ORIGINS", "*")
     CORS_ORIGINS: List[str] = [o.strip() for o in _CORS.split(",") if o.strip()]
 
-    # Auth
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "dev-secret-change-me")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
-    ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
+    # Session
+    SESSION_SECRET: str = os.getenv("SESSION_SECRET", "dev-session-secret-change-me")
+    SESSION_MAX_AGE: int = int(os.getenv("SESSION_MAX_AGE", "3600"))
+
+    # UI/Docs exposure (default: off in LAN)
+    ENABLE_DOCS: bool = os.getenv("ENABLE_DOCS", "0") == "1"
+    ENABLE_DEV_PAGES: bool = os.getenv("ENABLE_DEV_PAGES", "0") == "1"
+
+    # Frontend redirect target
+    UI_BASE: str | None = os.getenv("UI_BASE") or None
+    UI_PORT: int = int(os.getenv("UI_PORT", "8080"))
+
+    # LLM toggle (OpenAI)
+    LLM_ENABLED: bool = os.getenv("LLM_ENABLED", "0") == "1"
+    LLM_PROVIDER: str | None = os.getenv("LLM_PROVIDER") or "openai"
+    OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY") or None
 
 settings = Settings()

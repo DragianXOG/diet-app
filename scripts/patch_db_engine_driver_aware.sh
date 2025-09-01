@@ -1,3 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(pwd)"
+FILE="app/core/db.py"
+BACKUP="${FILE}.bak.$(date +%s)"
+SERVICE_NAME="${SERVICE_NAME:-diet-app.service}"
+
+[[ -f "$FILE" ]] || { echo "❌ $FILE not found. Run from your repo root."; exit 1; }
+
+cp -a "$FILE" "$BACKUP"
+echo "🗂  Backup -> $BACKUP"
+
+cat > "$FILE" <<'PY'
 from sqlmodel import SQLModel, create_engine, Session
 from sqlalchemy import event
 from sqlalchemy.engine import make_url
@@ -50,3 +64,28 @@ def init_db() -> None:
     except Exception:
         # Don't crash app startup due to init; logs will show details.
         pass
+PY
+
+# Import test with project venv or system python3
+PY_BIN="$ROOT/.venv/bin/python"; [[ -x "$PY_BIN" ]] || PY_BIN="$(command -v python3)"
+echo "🔎 Import test ..."
+PYTHONPATH="$ROOT" "$PY_BIN" - <<'PY'
+import importlib
+m = importlib.import_module("app.main")
+print("ok", type(m.app).__name__)
+PY
+
+# Restart service if present
+if systemctl --user list-units | grep -q "$SERVICE_NAME"; then
+  echo "🔁 Restarting $SERVICE_NAME ..."
+  systemctl --user daemon-reload || true
+  systemctl --user restart "$SERVICE_NAME" || true
+  sleep 1
+  systemctl --user status "$SERVICE_NAME" -n 40 --no-pager || true
+else
+  echo "ℹ️  User service $SERVICE_NAME not found. Skipping restart."
+fi
+
+echo "🌐 Health:"
+curl -sS http://127.0.0.1:8010/api/v1/status || true; echo
+echo "✅ Driver-aware DB engine patch complete."

@@ -1,29 +1,112 @@
 import time
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import RedirectResponse
+from app.core.db import engine
+from sqlmodel import SQLModel
+import os
+
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .core.logging import init_logging
 from .core.db import init_db
 from .api.routes import router as api_router
-from .api.auth import router as auth_router
 from .api.diet import router as diet_router
+from .api.auth import router as auth_router
 
 init_logging(settings.LOG_LEVEL)
-app = FastAPI(title=settings.APP_NAME, version=settings.VERSION)
+ALLOW_ORIGINS = [
+  "http://192.168.40.184:8080", "http://localhost:8080", "http://127.0.0.1:8080",
+  "http://localhost:5173", "http://127.0.0.1:5173"
+]
 
-# CORS
-allow_origins = ["*"] if settings.CORS_ORIGINS == ["*"] else settings.CORS_ORIGINS
+app = FastAPI(
+    title=settings.APP_NAME,
+    version=settings.VERSION,
+    docs_url=("/docs" if settings.ENABLE_DOCS else None),
+    redoc_url=None,
+    openapi_url=("/openapi.json" if settings.ENABLE_DOCS else None),
+)
+
+
+# --- Unified DEV CORS (localhost + LAN) ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allow_origins,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1|192\.168\.40\.184)(:\d+)?$",
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-    allow_credentials=False,
 )
+from starlette.middleware.sessions import SessionMiddleware
+app.add_middleware(SessionMiddleware, secret_key=settings.SESSION_SECRET, max_age=settings.SESSION_MAX_AGE)
+# --- /Unified DEV CORS ---
+# CORS
+allow_origins = ["*"] if settings.CORS_ORIGINS == ["*"] else settings.CORS_ORIGINS
+from sqlalchemy import text as _sa_text, inspect as _sa_inspect
+
+
+def _ensure_dev_user():
+    try:
+        # In dev/no-auth mode, ensure a synthetic user exists for FK/RLS
+        if not os.getenv("DEV_NO_AUTH", "0") == "1":
+            return
+        uid = int(os.getenv("DEV_USER_ID", "37"))
+        email = os.getenv("DEV_USER_EMAIL", "dev@example.com")
+        with engine.begin() as conn:
+            try:
+                res = conn.execute(_sa_text("SELECT id FROM users WHERE id=:id").bindparams(id=uid))
+                if res.first() is None:
+                    conn.execute(
+                        _sa_text(
+                            """
+                            INSERT INTO users (id, email, password_hash, token_version, created_at)
+                            VALUES (:id, :email, :ph, 0, CURRENT_TIMESTAMP)
+                            """
+                        ).bindparams(id=uid, email=email, ph="dev")
+                    )
+            except Exception:
+                # Table may not exist yet or other DB backends; ignore
+                pass
+    except Exception:
+        pass
+
+def _ensure_schema():
+    """Ensure runtime schema tweaks without manual Alembic.
+    - Add intakes.meals_per_day (INTEGER NULL) if missing.
+    Safe on SQLite and Postgres.
+    """
+    try:
+        insp = _sa_inspect(engine)
+        cols = {c.get('name') for c in insp.get_columns('intakes')}
+        with engine.begin() as conn:
+            if 'meals_per_day' not in cols:
+                try:
+                    conn.execute(_sa_text('ALTER TABLE intakes ADD COLUMN meals_per_day INTEGER'))
+                except Exception:
+                    pass
+            if 'workout_days_per_week' not in cols:
+                try:
+                    conn.execute(_sa_text('ALTER TABLE intakes ADD COLUMN workout_days_per_week INTEGER'))
+                except Exception:
+                    pass
+            if 'workout_session_min' not in cols:
+                try:
+                    conn.execute(_sa_text('ALTER TABLE intakes ADD COLUMN workout_session_min INTEGER'))
+                except Exception:
+                    pass
+            if 'workout_time' not in cols:
+                try:
+                    conn.execute(_sa_text('ALTER TABLE intakes ADD COLUMN workout_time VARCHAR(8)'))
+                except Exception:
+                    pass
+    except Exception:
+        # Inspector may fail on fresh DB; ignore
+        pass
 
 @app.on_event("startup")
 def _startup():
     init_db()
+    _ensure_dev_user()
+    _ensure_schema()
 
 @app.get("/")
 def read_root():
@@ -43,6 +126,8 @@ from fastapi.responses import HTMLResponse
 
 @app.get("/app", response_class=HTMLResponse)
 def app_page():
+    if not settings.ENABLE_DEV_PAGES:
+        raise HTTPException(status_code=404)
     return """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -68,19 +153,28 @@ def app_page():
       <a class="button" href="/health">Health</a>
       <a class="button" href="/api/v1/status">Status JSON</a>
     </p>
-    <p class="muted">Tip: use <code>test@example.com</code> in <em>Authorize</em> to try protected endpoints.</p>
+    <p class="muted">Tip: use the links above to explore the API.</p>
   </div>
 </body>
 </html>"""
 
-# --- Browser root redirect to /app (keeps JSON for scripts/curl) ---
-from fastapi import Request
-from fastapi.responses import RedirectResponse
-
+# --- Redirect any HTML requests to the UI front page ---
 @app.middleware("http")
-async def _root_html_redirect(request: Request, call_next):
-    if request.url.path == "/" and "text/html" in request.headers.get("accept", "").lower():
-        return RedirectResponse(url="/app", status_code=302)
+async def _redirect_html_to_ui(request: Request, call_next):
+    try:
+        accept = request.headers.get("accept", "").lower()
+        path = request.url.path
+        if "text/html" in accept and not path.startswith("/api"):
+            # Build UI base target
+            ui_base = settings.UI_BASE
+            if not ui_base:
+                scheme = request.url.scheme or "http"
+                host = request.url.hostname or "localhost"
+                port = settings.UI_PORT
+                ui_base = f"{scheme}://{host}:{port}"
+            return RedirectResponse(url=ui_base, status_code=302)
+    except Exception:
+        pass
     return await call_next(request)
 
 # --- Simple interactive UI at /ui ---
@@ -88,6 +182,8 @@ from fastapi.responses import HTMLResponse
 
 @app.get("/ui", response_class=HTMLResponse)
 def ui_page():
+    if not settings.ENABLE_DEV_PAGES:
+        raise HTTPException(status_code=404)
     return """<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -112,29 +208,10 @@ def ui_page():
 <body>
   <div class="card">
     <h1>Diet App — Minimal UI</h1>
-    <p class="muted">Login with your account, then call protected endpoints.</p>
+    <p class="muted">LAN-only demo UI. No login required.</p>
 
     <div class="grid">
-      <div class="box">
-        <h3>Login</h3>
-        <label>Email</label>
-        <input id="email" placeholder="test@example.com" value="test@example.com">
-        <label>Password</label>
-        <input id="password" type="password" placeholder="••••••••••">
-        <div class="row">
-          <button onclick="login()">Get Token</button>
-          <button onclick="logout()">Logout</button>
-        </div>
-        <p class="muted" id="who"></p>
-      </div>
-
-      <div class="box">
-        <h3>Auth: /api/v1/auth/me</h3>
-        <div class="row">
-          <button onclick="me()">Fetch Me</button>
-        </div>
-        <pre id="meOut"></pre>
-      </div>
+      
 
       <div class="box">
         <h3>Create Meal</h3>
@@ -169,38 +246,13 @@ def ui_page():
 <script>
 const $ = sel => document.querySelector(sel);
 const BASE = '';
-
-function token() { return localStorage.getItem('diet_token') || ''; }
-function setToken(t) { localStorage.setItem('diet_token', t || ''); updateWho(); }
 function hdrs(json=true){
   const h = new Headers();
   if (json) h.set('Content-Type','application/json');
-  const t = token(); if (t) h.set('Authorization','Bearer '+t);
   return h;
 }
 function show(id, data){ $(id).textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2); }
 
-async function login(){
-  const email = $('#email').value.trim();
-  const password = $('#password').value;
-  const body = new URLSearchParams();
-  body.set('username', email);
-  body.set('password', password);
-  const res = await fetch(BASE + '/api/v1/auth/token', {
-    method:'POST',
-    headers: {'Content-Type':'application/x-www-form-urlencoded'},
-    body
-  });
-  const data = await res.json().catch(()=>({}));
-  if (res.ok && data.access_token){ setToken(data.access_token); }
-  else { alert('Login failed'); }
-}
-function logout(){ setToken(''); }
-
-async function me(){
-  const res = await fetch(BASE + '/api/v1/auth/me', { headers: hdrs() });
-  show('#meOut', await res.json().catch(()=>res.status+' error'));
-}
 async function createMeal(){
   const payload = { name: $('#mealName').value, items: [{name:'turkey',calories:180},{name:'bread',calories:140}] };
   const res = await fetch(BASE + '/api/v1/meals', { method:'POST', headers: hdrs(), body: JSON.stringify(payload) });
@@ -219,15 +271,9 @@ async function listGroceries(){
   const res = await fetch(BASE + '/api/v1/groceries?only_open=false', { headers: hdrs() });
   show('#groOut', await res.json().catch(()=>res.status+' error'));
 }
-async function updateWho(){
-  const t = token();
-  if (!t){ $('#who').textContent = 'Not logged in'; return; }
-  const res = await fetch(BASE + '/api/v1/auth/me', { headers: hdrs() });
-  if (res.ok){
-    const me = await res.json(); $('#who').textContent = 'Logged in as '+me.email+' (id '+me.id+')';
-  } else { $('#who').textContent = 'Token invalid'; }
-}
-updateWho();
+// no user auth in demo UI
 </script>
 </body>
 </html>"""
+
+# Removed legacy intake endpoints; use app/api/diet.py for intake, meals, etc.

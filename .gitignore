@@ -25,3 +25,26 @@ certs/
 data/
 *.dump
 *.sha256
+ui/dist
+ui/node_modules
+.venv
+
+# Editor/backup temporaries
+*.bak
+*.bak.*
+*.rls.bak
+*.orig
+*.prefix
+
+# PID files
+*.pid
+
+# Local env overrides
+.env.local
+*.env.local
+
+# Node lockfile at repo root (UI manages its own inside ui/)
+/package-lock.json
+
+# UI backup artifacts
+/ui_backup_*.tar.gz
