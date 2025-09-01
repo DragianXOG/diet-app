@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import SimpleAuthFlow from "./components/auth/SimpleAuthFlow.jsx";
+// Auth overlay removed for LAN-only mode
 import { motion } from "framer-motion";
 
 import { Button } from "@/components/ui/button";
@@ -72,49 +72,28 @@ function useApi() {
   const [baseUrl, setBaseUrl] = useState(() =>
     ls.get("diet.baseUrl", initialBase)
   );
-  const [token, setToken] = useState(() =>
-    ls.get("diet.token", localStorage.getItem("diet.app.token") || "")
-  );
   const [userId, setUserId] = useState(() => ls.get("diet.userId", ""));
 
   useEffect(() => {
     ls.set("diet.baseUrl", baseUrl);
   }, [baseUrl]);
   useEffect(() => {
-    ls.set("diet.token", token);
-  }, [token]);
-  useEffect(() => {
     ls.set("diet.userId", userId);
   }, [userId]);
 
   // Listen for external auth/base events (optional overlay)
   useEffect(() => {
-    function onTok(e) {
-      setToken(e.detail || localStorage.getItem("diet.app.token") || "");
-    }
     function onBase(e) {
       const fallback = `${window.location.protocol}//${window.location.hostname}:8010`;
       setBaseUrl(e.detail || localStorage.getItem("diet.app.base") || fallback);
     }
-    window.addEventListener("diet.token", onTok);
     window.addEventListener("diet.base", onBase);
     return () => {
-      window.removeEventListener("diet.token", onTok);
       window.removeEventListener("diet.base", onBase);
     };
   }, []);
 
-  // If we have a token but no userId, try to fetch it
-  useEffect(() => {
-    (async () => {
-      try {
-        if (!token || userId) return;
-        const me = await request("/api/v1/auth/me");
-        if (me?.id) setUserId(String(me.id));
-      } catch {}
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, baseUrl]);
+  // No token-based user fetch in LAN-only mode
 
   function buildUrl(path) {
     if (/^https?:\/\//i.test(path)) return path;
@@ -130,15 +109,16 @@ function useApi() {
   }
 
   async function request(path, { method = "GET", body, headers } = {}) {
-    const url = buildUrl(path);
+    // Use relative /api/* when provided to allow cookie-based session via proxy
+    const url = /^\/api\//.test(path) ? path : buildUrl(path);
     const opts = {
       method,
       headers: {
         Accept: "application/json",
         ...(body ? { "Content-Type": "application/json" } : {}),
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
         ...headers,
       },
+      credentials: 'include',
       ...(body != null ? { body: typeof body === "string" ? body : JSON.stringify(body) } : {}),
     };
     const res = await fetch(url, opts);
@@ -154,7 +134,7 @@ function useApi() {
     return json ?? text;
   }
 
-  return { baseUrl, setBaseUrl, token, setToken, userId, setUserId, request };
+  return { baseUrl, setBaseUrl, userId, setUserId, request };
 }
 
 /* -----------------------------
@@ -225,8 +205,7 @@ function SettingsPanel({ api }) {
           API Settings
         </CardTitle>
         <CardDescription>
-          Point this UI to your Diet‑App API and (optionally) paste a Bearer token. Values are saved
-          locally. Supports <code>VITE_API_BASE</code> or host:port defaults.
+          Point this UI to your Diet‑App API base. Values are saved locally. Supports <code>VITE_API_BASE</code> or host:port defaults.
         </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
@@ -249,12 +228,7 @@ function SettingsPanel({ api }) {
           </div>
         </div>
         <div className="grid gap-2">
-          <Label>Bearer token (optional)</Label>
-          <Input
-            value={api.token}
-            onChange={(e) => api.setToken(e.target.value)}
-            placeholder="eyJhbGciOi..."
-          />
+          {/* Token removed in LAN-only mode */}
         </div>
         <div className="flex items-center gap-4">
           <Button onClick={healthCheck} disabled={checking}>
@@ -734,16 +708,18 @@ function AboutYou({ api }) {
     goals: "",
     zip: "",
     gym: "",
+    workout_days_per_week: "",
+    workout_session_min: "",
+    meals_per_day: "",
     food_notes: "",
     workout_notes: "",
   });
 
   useEffect(() => {
     (async () => {
-      if (!api.token) return;
       setLoading(true);
       try {
-        const data = await api.request("/api/v1/intake_open");
+        const data = await api.request("/api/v1/intake");
         if (data) {
           setForm({
             name: data.name ?? "",
@@ -757,6 +733,9 @@ function AboutYou({ api }) {
             goals: data.goals ?? "",
             zip: data.zip ?? "",
             gym: data.gym ?? "",
+            workout_days_per_week: (data.workout_days_per_week ?? "") === null ? "" : String(data.workout_days_per_week ?? ""),
+            workout_session_min: (data.workout_session_min ?? "") === null ? "" : String(data.workout_session_min ?? ""),
+            meals_per_day: (data.meals_per_day ?? "") === null ? "" : String(data.meals_per_day ?? ""),
             food_notes: data.food_notes ?? "",
             workout_notes: data.workout_notes ?? "",
           });
@@ -770,7 +749,7 @@ function AboutYou({ api }) {
         setLoading(false);
       }
     })();
-  }, [api.token, api.baseUrl]);
+  }, [api.baseUrl]);
 
   const setField = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
 
@@ -814,8 +793,19 @@ function AboutYou({ api }) {
       payload.age = payload.age ? Number(payload.age) : undefined;
       payload.height_in = payload.height_in ? Number(payload.height_in) : undefined;
       payload.weight_lb = payload.weight_lb ? Number(payload.weight_lb) : undefined;
+      if (form.meals_per_day && !Number.isNaN(Number(form.meals_per_day))) {
+        payload.meals_per_day = Number(form.meals_per_day);
+      } else {
+        delete payload.meals_per_day;
+      }
+      if (form.workout_days_per_week && !Number.isNaN(Number(form.workout_days_per_week))) {
+        payload.workout_days_per_week = Number(form.workout_days_per_week);
+      }
+      if (form.workout_session_min && !Number.isNaN(Number(form.workout_session_min))) {
+        payload.workout_session_min = Number(form.workout_session_min);
+      }
 
-      await api.request("/api/v1/intake_open", { method: "POST", body: payload });
+      await api.request("/api/v1/intake", { method: "POST", body: payload });
       setStatus("Saved.");
     } catch (e) {
       setErr(String(e.message || e));
@@ -831,9 +821,16 @@ function AboutYou({ api }) {
           <FileJson className="w-5 h-5" />
           About You
         </CardTitle>
-        <CardDescription>This information personalizes your plan. You can update it anytime.</CardDescription>
+        <CardDescription>
+          This information personalizes your plan. You can update it anytime.
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
+        {typeof window !== 'undefined' && localStorage.getItem('diet.updateNote') === '1' && (
+          <div className="rounded-xl border bg-muted/40 p-3 text-sm">
+            Please update this as often as necessary to keep your app working best for you.
+          </div>
+        )}
         {loading && <div>Loading…</div>}
         {!!err && <div className="text-red-600 text-sm">{err}</div>}
         {!!status && <div className="text-sm text-muted-foreground">{status}</div>}
@@ -854,16 +851,18 @@ function AboutYou({ api }) {
           </div>
           <div className="grid gap-1">
             <Label>Sex</Label>
-            <Select value={form.sex || ""} onValueChange={(v) => setField("sex", v)}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="M">Male</SelectItem>
-                <SelectItem value="F">Female</SelectItem>
-                <SelectItem value="O">Other / Prefer not to say</SelectItem>
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-4 py-2">
+              {[
+                {v:'M', label:'Male'},
+                {v:'F', label:'Female'},
+                {v:'O', label:'Other / Prefer not to say'},
+              ].map(opt => (
+                <label key={opt.v} className="flex items-center gap-2 text-sm">
+                  <input type="radio" name="about-sex" value={opt.v} checked={form.sex===opt.v} onChange={e=>setField('sex', e.target.value)} />
+                  <span>{opt.label}</span>
+                </label>
+              ))}
+            </div>
           </div>
           <div className="grid gap-1">
             <Label>Height (inches)</Label>
@@ -891,9 +890,56 @@ function AboutYou({ api }) {
             <Label>Gym</Label>
             <Input value={form.gym || ""} onChange={(e) => setField("gym", e.target.value)} placeholder="Crunch" />
           </div>
-          <div className="flex items-center gap-3 mt-6">
-            <Switch checked={!!form.diabetic} onCheckedChange={(v) => setField("diabetic", !!v)} />
+          <div className="grid gap-1">
+            <Label>Workout days per week</Label>
+            <Select value={form.workout_days_per_week || ""} onValueChange={(v) => setField("workout_days_per_week", v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select" />
+              </SelectTrigger>
+              <SelectContent>
+                {[...Array(7)].map((_, i) => (
+                  <SelectItem key={i + 1} value={String(i + 1)}>
+                    {i + 1}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label>Session length (minutes)</Label>
+            <Select value={form.workout_session_min || ""} onValueChange={(v) => setField("workout_session_min", v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select" />
+              </SelectTrigger>
+              <SelectContent>
+                {[15, 30, 45, 60, 75, 90, 105, 120].map((v) => (
+                  <SelectItem key={v} value={String(v)}>
+                    {v}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
+            <Label>Meals per day</Label>
+            <Input type="number" min={2} max={6} value={form.meals_per_day}
+                   onChange={(e)=> setField('meals_per_day', e.target.value)} placeholder="e.g., 3 or 5" />
+            <p className="text-xs text-muted-foreground">Optional: 2–6 meals/day. Planner will honor this.</p>
+          </div>
+          <div className="grid gap-1">
             <Label>Diabetic</Label>
+            <div className="flex items-center gap-4 py-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="about-diabetic" value="yes" checked={!!form.diabetic===true}
+                       onChange={()=> setField('diabetic', true)} />
+                <span>Yes</span>
+              </label>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="radio" name="about-diabetic" value="no" checked={!!form.diabetic===false}
+                       onChange={()=> setField('diabetic', false)} />
+                <span>No</span>
+              </label>
+            </div>
           </div>
         </div>
 
@@ -959,7 +1005,7 @@ function AboutYou({ api }) {
 }
 
 /* -----------------------------
-   Meal Plan (generate + history)
+  Meal Plan (generate + history)
 ------------------------------ */
 function MealPlan({ api }) {
   const [plan, setPlan] = useState(null);
@@ -1043,7 +1089,7 @@ function MealPlan({ api }) {
     setLoading(true);
     setStatus("Checking preferences and goals…");
     try {
-      const rz = await api.request("/api/v1/intake_open/rationalize", { method: "POST" });
+      const rz = await api.request("/api/v1/intake/rationalize", { method: "POST" });
       let confirmFlag = false;
       if (rz?.safety_required) {
         const warn = (rz.warnings || []).join("\n• ");
@@ -1281,19 +1327,19 @@ function MealPlan({ api }) {
                           {isOpen(i, k) && (
                             <div className="mt-2 text-sm">
                               <div className="font-medium mb-1">Ingredients</div>
-                              <ul className="list-disc pl-5">
+                              <ul className="list-disc pl-5 space-y-1">
                                 {m.ingredients.map((ing, idx) => (
                                   <li key={idx}>
-                                    {ing.name}
-                                    {ing.quantity != null ? ` — ${ing.quantity}` : ""}
-                                    {ing.unit ? ` ${ing.unit}` : ""}
+                                    {typeof ing === 'string'
+                                      ? ing
+                                      : `${ing.quantity ?? ''}${ing.unit ? ' ' + ing.unit : ''}${ing.quantity || ing.unit ? ' ' : ''}${ing.name ?? ''}`.trim()}
                                   </li>
                                 ))}
                               </ul>
                               {m.steps && m.steps.length > 0 && (
                                 <>
                                   <div className="font-medium mt-3 mb-1">Steps</div>
-                                  <ol className="list-decimal pl-5">
+                                  <ol className="list-decimal pl-5 space-y-1">
                                     {m.steps.map((s, idx) => (
                                       <li key={idx}>{s}</li>
                                     ))}
@@ -1347,19 +1393,19 @@ function MealPlan({ api }) {
                         {isOpen(i, k) && (
                           <div className="mt-2 text-sm">
                             <div className="font-medium mb-1">Ingredients</div>
-                            <ul className="list-disc pl-5">
+                            <ul className="list-disc pl-5 space-y-1">
                               {m.ingredients.map((ing, idx) => (
                                 <li key={idx}>
-                                  {ing.name}
-                                  {ing.quantity != null ? ` — ${ing.quantity}` : ""}
-                                  {ing.unit ? ` ${ing.unit}` : ""}
+                                  {typeof ing === 'string'
+                                    ? ing
+                                    : `${ing.quantity ?? ''}${ing.unit ? ' ' + ing.unit : ''}${ing.quantity || ing.unit ? ' ' : ''}${ing.name ?? ''}`.trim()}
                                 </li>
                               ))}
                             </ul>
                             {m.steps && m.steps.length > 0 && (
                               <>
                                 <div className="font-medium mt-3 mb-1">Steps</div>
-                                <ol className="list-decimal pl-5">
+                                <ol className="list-decimal pl-5 space-y-1">
                                   {m.steps.map((s, idx) => (
                                     <li key={idx}>{s}</li>
                                   ))}
@@ -1381,6 +1427,110 @@ function MealPlan({ api }) {
   );
 }
 
+/* -----------------------------
+   Workout Plan (generate + track)
+------------------------------ */
+function WorkoutPlan({ api }) {
+  const [workouts, setWorkouts] = useState([]);
+  const [status, setStatus] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState({});
+  const keyFor = (sid) => `s-${sid}`;
+  const toggle = (sid) => setOpen((p)=> ({...p, [keyFor(sid)]: !p[keyFor(sid)] }));
+
+  async function loadWeek() {
+    setLoading(true);
+    try {
+      const today = new Date();
+      const iso = (d)=> d.toISOString().slice(0,10);
+      const start = iso(today);
+      const end = iso(new Date(today.getTime() + 6*24*60*60*1000));
+      const data = await api.request(`/api/v1/workouts?start=${start}&end=${end}`);
+      setWorkouts(Array.isArray(data)? data: []);
+      setStatus(`Loaded ${data?.length || 0} sessions`);
+    } catch (e) {
+      setStatus("Could not load workouts");
+    } finally { setLoading(false); }
+  }
+
+  async function generateWeek() {
+    setLoading(true);
+    setStatus("Generating workouts…");
+    try {
+      await api.request('/api/v1/workouts/generate', { method:'POST', body:{ days: 7, persist: true }});
+      await loadWeek();
+      setStatus("Generated for this week");
+    } catch (e) {
+      console.error(e);
+      setStatus("Failed to generate workouts");
+    } finally { setLoading(false); }
+  }
+
+  async function markExercise(exId, complete) {
+    try {
+      await api.request(`/api/v1/workouts/exercises/${exId}`, { method:'PATCH', body:{ complete }});
+      await loadWeek();
+    } catch {}
+  }
+
+  useEffect(()=> { loadWeek(); }, []);
+
+  return (
+    <Card className="card-shadow">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-3">
+          <Dumbbell className="w-5 h-5" />
+          Workout Plan
+        </CardTitle>
+        <CardDescription>Generate a 7‑day workout plan based on your preferences. Track completion per exercise.</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        <div className="flex items-center gap-3 flex-wrap">
+          <Button onClick={generateWeek} disabled={loading}>
+            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <>🏋️&nbsp;</>}
+            Generate 7‑Day Workouts
+          </Button>
+          <Button variant="secondary" onClick={loadWeek} disabled={loading}>Refresh</Button>
+          {status && <span className="text-sm text-muted-foreground">{status}</span>}
+        </div>
+        {workouts.length === 0 ? (
+          <div className="text-sm text-muted-foreground">No workouts yet. Generate a plan above.</div>
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {workouts.map((w) => (
+              <div key={w.id} className="rounded-xl border overflow-hidden">
+                <div className="p-3">
+                  <div className="text-base font-semibold">{w.title} — {w.date}</div>
+                  <div className="text-xs text-muted-foreground">{w.location || 'Unspecified location'}</div>
+                </div>
+                <div className="p-3 grid gap-2">
+                  {w.exercises?.map((e) => (
+                    <div key={e.id} className="rounded-lg border p-2 flex items-start gap-3">
+                      <input type="checkbox" className="mt-1" checked={!!e.complete} onChange={(ev)=> markExercise(e.id, ev.target.checked)} />
+                      <div className="grid gap-0.5">
+                        <div className="font-medium text-sm">{e.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {e.machine ? `${e.machine} · ` : ''}
+                          {e.sets ? `${e.sets}×` : ''}{e.reps ?? ''}{e.target_weight ? ` @ ${e.target_weight} lb` : ''}
+                          {e.rest_sec ? ` · rest ${e.rest_sec}s` : ''}
+                        </div>
+                        {(e.actual_reps != null || e.actual_weight != null) && (
+                          <div className="text-xs">
+                            Done: {e.actual_reps ?? '-'} reps @ {e.actual_weight ?? '-'} lb
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 /* -----------------------------
    Trackers (weight + glucose)
 ------------------------------ */
@@ -1571,7 +1721,7 @@ export default function App() {
         </div>
       </header>
 
-      {!api.token && <SimpleAuthFlow />}
+      {/* Auth overlay removed for LAN-only mode */}
 
       <main className="w-full px-6 py-6 md:py-8 lg:py-10 grid gap-5 md:gap-8 lg:gap-10">
         <Tabs value={active} onValueChange={setActive} className="w-full">
@@ -1612,7 +1762,7 @@ export default function App() {
             <GroceryList api={api} />
           </TabsContent>
           <TabsContent value="workouts">
-            <Workouts />
+            <WorkoutPlan api={api} />
           </TabsContent>
           <TabsContent value="trackers">
             <Trackers />

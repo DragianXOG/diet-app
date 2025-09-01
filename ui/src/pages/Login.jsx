@@ -1,111 +1,82 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 
-function getBase() {
-  try {
-    const qs = new URLSearchParams(location.search).get("api");
-    return localStorage.getItem("diet.app.base") || qs || `${location.protocol}//${location.hostname}:8010`;
-  } catch { return `${location.protocol}//${location.hostname}:8010`; }
-}
-
-async function tryLogin(base, email, password) {
-  const candidates = [
-    "/api/v1/auth/login",
-    "/api/v1/auth/token",
-    "/api/v1/auth/signin",
-    "/login"
-  ];
-  const body = JSON.stringify({ email, password });
-  for (const path of candidates) {
-    try {
-      const res = await fetch(`${base}${path}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Accept": "application/json" },
-        body
-      });
-      const j = await res.json().catch(()=> ({}));
-      if (!res.ok) continue;
-      const tok = j.access_token || j.token || j.accessToken;
-      if (!tok) continue;
-      return tok;
-    } catch {}
-  }
-  throw new Error("Login failed (no token).");
-}
-
-async function hasIntake(base, tok) {
-  try {
-    const r = await fetch(`${base}/api/v1/intake_open`);
-    if (!r.ok) return false;
-    const j = await r.json().catch(()=>null);
-    return !!j;
-  } catch { return false; }
-}
-
-const tok = "";
 export default function Login() {
   const nav = useNavigate();
   const [email, setEmail] = useState("");
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
+  const [emailErr, setEmailErr] = useState("");
+  const [pwErr, setPwErr] = useState("");
   const [busy, setBusy] = useState(false);
+  const expired = typeof window !== 'undefined' && new URLSearchParams(location.search).get('expired') === '1';
 
-  // If already authed, skip to intake/app
-  useEffect(() => {
-    if (!tok) return;
-    (async () => {
-      const base = getBase();
-      if (await hasIntake(base, tok)) window.location.replace("/app");
-      else window.location.replace("/intake");
-    })();
-  }, []);
-
-  async function submit(e) {
+  async function submit(e){
     e?.preventDefault();
     setErr("");
-    setBusy(true);
+    setEmailErr("");
+    setPwErr("");
+    if (!email) { setEmailErr("Email is required."); return; }
+    if (!pw) { setPwErr("Password is required."); return; }
     try {
-      const base = getBase();
-      const tok = await tryLogin(base, email, pw);
-      localStorage.setItem("diet.app.token", tok);
-      localStorage.setItem("diet.token", tok);
-      localStorage.setItem("diet.app.base", base);
-      window.dispatchEvent(new CustomEvent("diet.token", { detail: tok }));
-      window.dispatchEvent(new CustomEvent("diet.base", { detail: base }));
-      if (await hasIntake(base, tok)) window.location.assign("/app");
-      else window.location.assign("/intake");
+      setBusy(true);
+      const res = await fetch('/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email, password: pw }),
+      });
+      const t = await res.text(); let j=null; try{ j= t? JSON.parse(t): null;}catch{}
+      if (!res.ok) {
+        if (res.status === 401) {
+          setPwErr("Invalid email or password.");
+          throw new Error("Invalid email or password.");
+        }
+        if (res.status === 422 && j && Array.isArray(j.detail)) {
+          for (const d of j.detail) {
+            const loc = Array.isArray(d.loc) ? d.loc : [];
+            const field = String(loc[loc.length - 1] || '').toLowerCase();
+            const msg = d.msg || d.message || 'Invalid value';
+            if (field === 'email') setEmailErr(String(msg));
+            if (field === 'password') setPwErr(String(msg));
+          }
+          throw new Error('Please fix the highlighted fields.');
+        }
+        throw new Error((j && (j.detail || j.error)) || res.statusText);
+      }
+      const params = new URLSearchParams(location.search);
+      const next = params.get('next');
+      nav(next && next.startsWith('/') ? next : '/app');
     } catch (e2) {
-      setErr(String(e2.message || e2));
-    } finally {
-      setBusy(false);
-    }
+      setErr(String(e2?.message || e2));
+    } finally { setBusy(false); }
   }
-
   return (
     <main className="container mx-auto max-w-md p-6">
       <Card className="card-shadow">
         <CardHeader>
           <CardTitle>Login</CardTitle>
-          <CardDescription>Welcome back! Enter your credentials to continue.</CardDescription>
+          <CardDescription>Enter your email and password to continue.</CardDescription>
         </CardHeader>
         <CardContent>
+          {expired && <div className="text-amber-700 bg-amber-100 border border-amber-200 rounded-xl p-2 text-sm mb-3">Your session expired. Please re-authenticate to continue.</div>}
           {err && <div className="text-red-600 text-sm mb-3">{err}</div>}
-          <form className="grid gap-4" onSubmit={submit}>
-            <div className="grid gap-1">
-              <Label>Email</Label>
-              <Input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="you@example.com" required />
-            </div>
-            <div className="grid gap-1">
-              <Label>Password</Label>
-              <Input type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="••••••••" required />
-            </div>
+          <form className="grid gap-3" onSubmit={submit}>
+            <label className="grid gap-1">
+              <span>Email</span>
+              <input className="border rounded-xl p-2" type="email" value={email} onChange={e=>{ setEmail(e.target.value); setEmailErr(""); }} required />
+              {emailErr && <span className="text-red-600 text-sm">{emailErr}</span>}
+            </label>
+            <label className="grid gap-1">
+              <span>Password</span>
+              <input className="border rounded-xl p-2" type="password" value={pw} onChange={e=>{ setPw(e.target.value); setPwErr(""); }} required />
+              {pwErr && <span className="text-red-600 text-sm">{pwErr}</span>}
+            </label>
             <div className="flex gap-3">
-              <Button type="submit" disabled={busy}>Login</Button>
-              <Button type="button" onClick={()=>nav("/signup")}>Create account instead</Button>
+              <Button type="submit" disabled={busy}>{busy ? 'Logging in…' : 'Login'}</Button>
+              <Button type="button" variant="secondary" onClick={()=>nav('/signup')}>Register</Button>
             </div>
           </form>
         </CardContent>

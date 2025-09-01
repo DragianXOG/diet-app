@@ -39,8 +39,14 @@ class Intake(SQLModel, table=True):
     conditions: Optional[str] = Field(default=None)
     meds: Optional[str] = Field(default=None)
     goals: Optional[str] = Field(default=None)
+    # Optional explicit meals/day preference (2-6 typical)
+    meals_per_day: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
     zip: Optional[str] = Field(default=None)
     gym: Optional[str] = Field(default=None)
+    # Workout preferences
+    workout_days_per_week: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
+    workout_session_min: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
+    workout_time: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(8)))
     created_at: datetime = Field(
         default_factory=datetime.utcnow,
         sa_column=sa.Column(sa.DateTime, nullable=False)
@@ -94,3 +100,28 @@ class GroceryItem(SQLModel, table=True):
         default_factory=datetime.utcnow,
         sa_column=sa.Column(sa.DateTime, index=True, nullable=False),
     )
+
+# --- Workouts ---
+class WorkoutSession(SQLModel, table=True):
+    __tablename__ = "workout_sessions"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(sa_column=sa.Column(sa.Integer, sa.ForeignKey("users.id", ondelete="CASCADE"), index=True, nullable=False))
+    date: datetime = Field(default_factory=datetime.utcnow, sa_column=sa.Column(sa.DateTime, index=True, nullable=False))
+    title: str = Field(sa_column=sa.Column(sa.String(160), nullable=False))
+    location: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(120)))
+    created_at: datetime = Field(default_factory=datetime.utcnow, sa_column=sa.Column(sa.DateTime, nullable=False))
+
+class WorkoutExercise(SQLModel, table=True):
+    __tablename__ = "workout_exercises"
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: int = Field(sa_column=sa.Column(sa.Integer, sa.ForeignKey("workout_sessions.id", ondelete="CASCADE"), index=True, nullable=False))
+    order_index: int = Field(default=0, sa_column=sa.Column(sa.Integer, nullable=False))
+    name: str = Field(sa_column=sa.Column(sa.String(160), nullable=False))
+    machine: Optional[str] = Field(default=None, sa_column=sa.Column(sa.String(160)))
+    sets: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
+    reps: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
+    target_weight: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
+    rest_sec: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
+    complete: bool = Field(default=False, sa_column=sa.Column(sa.Boolean, index=True, nullable=False))
+    actual_reps: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
+    actual_weight: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))

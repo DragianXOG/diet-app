@@ -1,11 +1,5 @@
 // ui/src/lib/api.js
-const API_BASE =
-  import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8010/api/v1';
-
-function authHeaders() {
-  const tok = localStorage.getItem('access_token');
-  return tok ? { Authorization: `Bearer ${tok}` } : {};
-}
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://127.0.0.1:8010/api/v1';
 
 async function handle(res) {
   if (!res.ok) {
@@ -23,7 +17,7 @@ async function handle(res) {
 
 export async function getJSON(path) {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { Accept: 'application/json', ...authHeaders() },
+    headers: { Accept: 'application/json' },
   });
   return handle(res);
 }
@@ -34,10 +28,8 @@ export async function postJSON(path, body = {}, method = 'POST') {
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json',
-      ...authHeaders(),
     },
     body: JSON.stringify(body),
   });
   return handle(res);
 }
-

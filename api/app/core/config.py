@@ -17,9 +17,6 @@ class Settings(BaseSettings):
     # DB connection
     DATABASE_URL: str = "postgresql://life_app:lifeapp_local@127.0.0.1:5432/dietapp"
 
-    # Auth
-    JWT_SECRET: str = "change-me"       # 🔑 generate a random string in prod
-    JWT_ALG: str = "HS256"
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30  # ⏱ force 30 min expiry
+    # Auth removed in LAN-only mode
 
 settings = Settings()
