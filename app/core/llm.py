@@ -118,12 +118,12 @@ def generate_workout_plan(
 
     try:
         client = OpenAI(api_key=api_key)
-        # Build concise system prompt with constraints
+        # PhD Coach v3.27 framing for workouts
         sys = (
-            "You are a certified trainer. Generate a weekly workout plan as compact JSON. "
-            "Use machine-specific names when appropriate (e.g., Smith Machine, Lat Pulldown). "
-            "Respect user's available equipment and preferences, sessions per week, and session length. "
-            "Output JSON only with fields: sessions:[{date,title,exercises:[{name,machine,sets,reps,target_weight,rest_sec}]}]."
+            "You are the PhD Coach v3.27. Use S3N workout logic (specificity, progressive overload, fatigue management) "
+            "and return strictly JSON. Never include prose outside JSON. JSON schema: {\"sessions\":[{\"date\":\"YYYY-MM-DD\",\"title\":str,\"exercises\":[{\"name\":str,\"machine\":str|null,\"sets\":int,\"reps\":int,\"rpe\":int|null,\"rest_sec\":int}]}]}. "
+            "Respect user's equipment, gym context, preferred session minutes and frequency. Prefer machines at Planet Fitness; "
+            "avoid movements unavailable there. Keep each session 2–6 exercises and trim to fit minutes."
         )
         # Extract minimal prefs
         gym = getattr(intake, 'gym', None)
@@ -170,3 +170,88 @@ def generate_workout_plan(
     except Exception:
         # Any failure → fallback plan
         return _fallback_plan(intake=intake, days=days, per_week=per_week, minutes=minutes, equipment=equipment)
+
+
+def generate_diet_plan(
+    *,
+    intake: Any,
+    days: int,
+    meals_per_day: int,
+    avoids: List[str],
+    calorie_target: Optional[int] = None,
+) -> Optional[Dict[str, Any]]:
+    """Optional LLM-based diet plan generator following PhD Coach v3.27.
+    Returns a dict with keys: label, start, end, days (list of {date, meals:[{time,title,kcal,ingredients,steps}]})
+    or None on failure/unavailable.
+    """
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key or OpenAI is None:
+        return None
+    try:
+        client = OpenAI(api_key=api_key)
+        sys = (
+            "You are the PhD Coach v3.27 using the NSSN nutrition framework. "
+            "Generate a compact JSON meal plan for the user. Respect avoid_ingredients strictly (exclude or substitute). "
+            "Aim for balanced micronutrients unless user notes indicate low-carb or diabetic focus; then bias carbs lower. "
+            "Match the daily calorie target (calorie_target) within ±5% across the day's meals. "
+            "Output strictly JSON with top-level key 'days' (array) where each item is {date, meals}. "
+            "Each meal is {time: 'HH:MM', title, kcal: int, ingredients: [string], steps: [string]}."
+        )
+        # Extract preferences
+        notes = (getattr(intake, 'food_notes', '') or '')
+        diabetic = bool(getattr(intake, 'diabetic', False))
+        mpd = max(1, min(8, int(meals_per_day or 3)))
+        start = date.today().isoformat()
+        payload = {
+            'days': int(days),
+            'meals_per_day': mpd,
+            'avoid_ingredients': [a for a in avoids if a],
+            'diabetic': diabetic,
+            'notes': notes,
+            'calorie_target': int(calorie_target) if calorie_target else None,
+        }
+        # calorie_target provided by caller; LLM should match within ±5%.
+        messages = [
+            {"role": "system", "content": sys},
+            {"role": "user", "content": json.dumps(payload)},
+        ]
+        resp = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=messages,
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        txt = resp.choices[0].message.content or "{}"
+        data = json.loads(txt)
+        days_arr = data.get('days') or []
+        if not isinstance(days_arr, list) or not days_arr:
+            return None
+        # Sanitize minimal shape
+        out_days: List[Dict[str, Any]] = []
+        for d in days_arr:
+            try:
+                date_str = d.get('date') or start
+                meals_list = d.get('meals') or []
+                norm_meals = []
+                for m in meals_list:
+                    norm_meals.append({
+                        'time': m.get('time') or '12:00',
+                        'title': m.get('title') or 'Meal',
+                        'kcal': int(m.get('kcal') or 500),
+                        'ingredients': m.get('ingredients') or [],
+                        'steps': m.get('steps') or [],
+                    })
+                out_days.append({'date': date_str, 'meals': norm_meals})
+            except Exception:
+                continue
+        if not out_days:
+            return None
+        return {
+            'label': 'PhD Coach Plan',
+            'start': out_days[0]['date'],
+            'end': out_days[-1]['date'],
+            'days': out_days,
+            'window': {'start': out_days[0]['date'], 'end': out_days[-1]['date']},
+        }
+    except Exception:
+        return None

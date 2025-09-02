@@ -21,8 +21,12 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# DB URL from env (fallback to sqlite if missing)
-db_url = os.getenv("DATABASE_URL", "sqlite:///data/app.db")
+# DB URL from env (Postgres required)
+db_url = os.getenv("DATABASE_URL")
+if not db_url:
+    raise RuntimeError("DATABASE_URL is required for migrations and must point to Postgres.")
+if not db_url.startswith("postgres") and not db_url.startswith("postgresql"):
+    raise RuntimeError(f"Unsupported database backend in DATABASE_URL: {db_url}")
 config.set_main_option("sqlalchemy.url", db_url)
 
 target_metadata = SQLModel.metadata

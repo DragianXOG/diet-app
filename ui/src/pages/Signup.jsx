@@ -86,7 +86,7 @@ export default function Signup() {
       }
       localStorage.setItem("diet.app.base", base);
       window.dispatchEvent(new CustomEvent("diet.base", { detail: base }));
-      nav('/intake');
+      nav('/app?tab=about');
     } catch (e2) {
       setErr(String(e2?.message || e2));
     } finally {

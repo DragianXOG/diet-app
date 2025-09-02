@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 export default function Header() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(false);
   const [remaining, setRemaining] = useState(null);
+  const [llmActive, setLlmActive] = useState(null);
   const loc = useLocation();
   const nav = useNavigate();
 
@@ -22,6 +24,17 @@ export default function Header() {
   }
 
   useEffect(() => { refreshMe(); }, [loc.pathname]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/v1/status', { credentials: 'include' });
+        const j = await res.json().catch(()=>null);
+        if (j) setLlmActive(!!(j.llm_enabled && j.llm_key_present));
+      } catch {
+        setLlmActive(null);
+      }
+    })();
+  }, []);
   // Periodic session check; if expired, redirect to login with message
   useEffect(() => {
     const id = setInterval(async () => {
@@ -75,6 +88,11 @@ export default function Header() {
       <div className="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between gap-3 flex-wrap">
         <Link to="/" className="font-semibold truncate">Life — Health</Link>
         <div className="flex items-center gap-2 flex-wrap">
+          {llmActive != null && (
+            <Badge variant={llmActive ? 'secondary' : 'outline'}>
+              {llmActive ? 'LLM Active' : 'LLM Off'}
+            </Badge>
+          )}
           {user && (
             <>
               <span className="text-sm text-gray-600 hidden sm:inline">Signed in as {user.email}</span>

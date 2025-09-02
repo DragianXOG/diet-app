@@ -18,13 +18,12 @@ import {
   Utensils,
   ListChecks,
   Activity,
-  Settings as SettingsIcon,
   FileJson,
   PlayCircle,
   RefreshCcw,
   Save,
   Download,
-  Database,
+  
   BarChart3,
   Drumstick,
   Milk,
@@ -161,167 +160,7 @@ function downloadTextFile(filename, text) {
   URL.revokeObjectURL(url);
 }
 
-/* -----------------------------
-   Settings Panel
------------------------------- */
-function SettingsPanel({ api }) {
-  const [ping, setPing] = useState(null);
-  const [checking, setChecking] = useState(false);
-
-  async function healthCheck() {
-    setChecking(true);
-    try {
-      const candidates = [
-        "/api/v1/status",
-        "/api/v1/health",
-        "/health",
-        "/status",
-        "/openapi.json",
-        "/docs",
-      ];
-      for (const p of candidates) {
-        try {
-          const data = await api.request(p);
-          setPing({ path: p, data });
-          setChecking(false);
-          return;
-        } catch {
-          /* try next */
-        }
-      }
-      throw new Error("No health endpoint responded.");
-    } catch (e) {
-      setPing({ error: String(e) });
-    } finally {
-      setChecking(false);
-    }
-  }
-
-  return (
-    <Card className="card-shadow">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-3">
-          <SettingsIcon className="w-5 h-5" />
-          API Settings
-        </CardTitle>
-        <CardDescription>
-          Point this UI to your Diet‑App API base. Values are saved locally. Supports <code>VITE_API_BASE</code> or host:port defaults.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid md:grid-cols-2 gap-4">
-          <div className="grid gap-2">
-            <Label>Base URL</Label>
-            <Input
-              value={api.baseUrl}
-              onChange={(e) => api.setBaseUrl(e.target.value)}
-              placeholder="http://127.0.0.1:8010 or http://127.0.0.1:8010/api/v1"
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label>User ID</Label>
-            <Input
-              value={api.userId}
-              onChange={(e) => api.setUserId(e.target.value)}
-              placeholder="e.g., 1"
-            />
-          </div>
-        </div>
-        <div className="grid gap-2">
-          {/* Token removed in LAN-only mode */}
-        </div>
-        <div className="flex items-center gap-4">
-          <Button onClick={healthCheck} disabled={checking}>
-            {checking ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Activity className="w-4 h-4 mr-2" />}
-            Check API
-          </Button>
-          {ping?.path && <Badge variant="secondary">Responded: {ping.path}</Badge>}
-        </div>
-        {ping && <JsonView data={ping.error ? { error: ping.error } : ping.data} />}
-      </CardContent>
-    </Card>
-  );
-}
-
-/* -----------------------------
-   API Explorer (manual requests)
------------------------------- */
-function ApiExplorer({ api }) {
-  const [method, setMethod] = useState("GET");
-  const [path, setPath] = useState("/api/v1/openapi.json");
-  const [body, setBody] = useState("{}");
-  const [loading, setLoading] = useState(false);
-  const [resp, setResp] = useState(null);
-
-  async function send() {
-    setLoading(true);
-    setResp(null);
-    try {
-      const needsBody = ["POST", "PUT", "PATCH", "DELETE"].includes(method);
-      const payload = needsBody && body.trim() ? JSON.parse(body) : undefined;
-      const data = await api.request(path, { method, body: payload });
-      setResp({ ok: true, data });
-    } catch (e) {
-      setResp({ ok: false, error: String(e) });
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  return (
-    <Card className="card-shadow">
-      <CardHeader>
-        <CardTitle className="flex items-center gap-3">
-          <Database className="w-5 h-5" />
-          API Explorer
-        </CardTitle>
-        <CardDescription>Call any endpoint on your API while it evolves.</CardDescription>
-      </CardHeader>
-      <CardContent className="grid gap-4">
-        <div className="grid md:grid-cols-3 gap-4">
-          <div className="grid gap-1">
-            <Label>Method</Label>
-            <Select value={method} onValueChange={setMethod}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {["GET", "POST", "PUT", "PATCH", "DELETE"].map((m) => (
-                  <SelectItem key={m} value={m}>
-                    {m}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="md:col-span-2 grid gap-1">
-            <Label>Path</Label>
-            <Input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/api/v1/status" />
-          </div>
-        </div>
-        {["POST", "PUT", "PATCH", "DELETE"].includes(method) && (
-          <div className="grid gap-1">
-            <Label>JSON Body</Label>
-            <Textarea
-              rows={6}
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder='{"name":"eggs","quantity":12,"unit":"ct"}'
-            />
-          </div>
-        )}
-        <div className="flex gap-4">
-          <Button onClick={send} disabled={loading}>
-            {loading ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <PlayCircle className="w-4 h-4 mr-2" />}
-            Send
-          </Button>
-          {resp && <Badge variant={resp.ok ? "default" : "destructive"}>{resp.ok ? "Success" : "Error"}</Badge>}
-        </div>
-        {resp && <JsonView data={resp.ok ? resp.data : { error: resp.error }} />}
-      </CardContent>
-    </Card>
-  );
-}
+/* Settings and Explorer removed for simplified UI */
 
 /* -----------------------------
    Pricing Panel (integrated in Groceries)
@@ -710,9 +549,11 @@ function AboutYou({ api }) {
     gym: "",
     workout_days_per_week: "",
     workout_session_min: "",
+    workout_time: "",
     meals_per_day: "",
     food_notes: "",
     workout_notes: "",
+    avoid_ingredients: "",
   });
 
   useEffect(() => {
@@ -735,9 +576,11 @@ function AboutYou({ api }) {
             gym: data.gym ?? "",
             workout_days_per_week: (data.workout_days_per_week ?? "") === null ? "" : String(data.workout_days_per_week ?? ""),
             workout_session_min: (data.workout_session_min ?? "") === null ? "" : String(data.workout_session_min ?? ""),
+            workout_time: (data.workout_time ?? "") === null ? "" : String(data.workout_time ?? ""),
             meals_per_day: (data.meals_per_day ?? "") === null ? "" : String(data.meals_per_day ?? ""),
             food_notes: data.food_notes ?? "",
             workout_notes: data.workout_notes ?? "",
+            avoid_ingredients: data.avoid_ingredients ?? "",
           });
           setStatus("Loaded your intake");
         } else {
@@ -752,6 +595,18 @@ function AboutYou({ api }) {
   }, [api.baseUrl]);
 
   const setField = (k, v) => setForm((prev) => ({ ...prev, [k]: v }));
+  
+  // Ingredient preferences (default: all selected; user unchecks to avoid)
+  const INGREDIENT_OPTIONS = [
+    'seafood','shellfish','fish','pork','beef','chicken','turkey','eggs','dairy','cheese','milk','yogurt','tofu','soy','gluten','wheat','nuts','peanuts','tree nuts','legumes','beans','lentils','onions','garlic','scallions','mushrooms','broccoli','cauliflower','peppers','tomatoes','spinach'
+  ];
+  const avoidSet = useMemo(() => new Set(String(form.avoid_ingredients||'').split(',').map(s=>s.trim()).filter(Boolean)), [form.avoid_ingredients]);
+  const isSelected = (name) => !avoidSet.has(name);
+  const toggleIngredient = (name) => {
+    const s = new Set(avoidSet);
+    if (s.has(name)) s.delete(name); else s.add(name);
+    setField('avoid_ingredients', Array.from(s).join(', '));
+  };
 
   function parseMealsPerDay(notes) {
     if (!notes) return null;
@@ -804,7 +659,15 @@ function AboutYou({ api }) {
       if (form.workout_session_min && !Number.isNaN(Number(form.workout_session_min))) {
         payload.workout_session_min = Number(form.workout_session_min);
       }
+      if (form.workout_time && /^\d{2}:\d{2}$/.test(form.workout_time)) {
+        payload.workout_time = form.workout_time;
+      }
 
+      // ensure avoid_ingredients is comma list
+      if (payload.avoid_ingredients) {
+        const list = String(payload.avoid_ingredients).split(',').map(s=>s.trim()).filter(Boolean);
+        payload.avoid_ingredients = Array.from(new Set(list)).join(',');
+      }
       await api.request("/api/v1/intake", { method: "POST", body: payload });
       setStatus("Saved.");
     } catch (e) {
@@ -921,6 +784,24 @@ function AboutYou({ api }) {
             </Select>
           </div>
           <div className="grid gap-1">
+            <Label>Preferred workout time</Label>
+            <Select value={form.workout_time || ""} onValueChange={(v) => setField("workout_time", v)}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select" />
+              </SelectTrigger>
+              <SelectContent>
+                {Array.from({ length: 17 }, (_, i) => i + 5).map((h) => {
+                  const s = String(h).padStart(2, "0") + ":00";
+                  return (
+                    <SelectItem key={s} value={s}>
+                      {s}
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1">
             <Label>Meals per day</Label>
             <Input type="number" min={2} max={6} value={form.meals_per_day}
                    onChange={(e)=> setField('meals_per_day', e.target.value)} placeholder="e.g., 3 or 5" />
@@ -964,6 +845,19 @@ function AboutYou({ api }) {
           <p className="text-sm text-muted-foreground mt-1">
             Tip: Include timelines (e.g., “in 8 weeks”) so we can tailor pace and warnings.
           </p>
+        </div>
+
+        <div className="grid gap-1">
+          <Label>Ingredient preferences</Label>
+          <p className="text-xs text-muted-foreground mb-2">Default is everything selected. Uncheck ingredients you want to avoid.</p>
+          <div className="grid md:grid-cols-3 gap-2">
+            {INGREDIENT_OPTIONS.map((name) => (
+              <label key={name} className="flex items-center gap-2 text-sm border rounded-lg p-2 bg-white/80">
+                <input type="checkbox" checked={isSelected(name)} onChange={()=>toggleIngredient(name)} />
+                <span className="capitalize">{name}</span>
+              </label>
+            ))}
+          </div>
         </div>
 
         <div className="grid gap-1">
@@ -1428,6 +1322,116 @@ function MealPlan({ api }) {
 }
 
 /* -----------------------------
+   Trackers (summary + weight + glucose)
+------------------------------ */
+function Trackers({ api }) {
+  const [summary, setSummary] = useState(null);
+  const [weight, setWeight] = useState("");
+  const [weightList, setWeightList] = useState([]);
+  const [glucose, setGlucose] = useState("");
+  const [glucoseList, setGlucoseList] = useState([]);
+  const [intake, setIntake] = useState(null);
+  const [status, setStatus] = useState("");
+
+  const todayIso = new Date().toISOString().slice(0,10);
+
+  async function loadAll() {
+    try {
+      const i = await api.request('/api/v1/intake'); setIntake(i||null);
+      const s = await api.request(`/api/v1/checklists/summary?start=${todayIso}&end=${todayIso}`);
+      setSummary(s||null);
+      const wl = await api.request('/api/v1/trackers/weight'); setWeightList(Array.isArray(wl)? wl: []);
+      const gl = await api.request('/api/v1/trackers/glucose'); setGlucoseList(Array.isArray(gl)? gl: []);
+    } catch (e) { setStatus('Failed to load trackers'); }
+  }
+
+  useEffect(()=>{ loadAll(); }, []);
+
+  async function addWeight() {
+    if (!weight) return;
+    try {
+      await api.request('/api/v1/trackers/weight', { method:'POST', body:{ weight_lb: Number(weight) }});
+      setWeight("");
+      await loadAll();
+    } catch (e) { setStatus('Failed to add weight'); }
+  }
+  async function addGlucose() {
+    if (!glucose) return;
+    try {
+      await api.request('/api/v1/trackers/glucose', { method:'POST', body:{ mg_dL: Number(glucose) }});
+      setGlucose("");
+      await loadAll();
+    } catch (e) { setStatus('Failed to add glucose'); }
+  }
+
+  return (
+    <Card className="card-shadow">
+      <CardHeader>
+        <CardTitle className="flex items-center gap-3">
+          <Activity className="w-5 h-5" />
+          Trackers
+        </CardTitle>
+        <CardDescription>Daily summary and logs for weight and blood sugar (if diabetic).</CardDescription>
+      </CardHeader>
+      <CardContent className="grid gap-4">
+        {status && <div className="text-sm text-red-600">{status}</div>}
+        <div className="grid sm:grid-cols-3 gap-3">
+          <div className="rounded-xl border p-3">
+            <div className="text-xs text-muted-foreground">Meals completed today</div>
+            <div className="text-2xl font-semibold">{summary ? `${summary.meals.completed}/${summary.meals.total}` : '—'}</div>
+          </div>
+          <div className="rounded-xl border p-3">
+            <div className="text-xs text-muted-foreground">Workout exercises done</div>
+            <div className="text-2xl font-semibold">{summary ? `${summary.workouts.completed}/${summary.workouts.exercises_total}` : '—'}</div>
+          </div>
+          <div className="rounded-xl border p-3">
+            <div className="text-xs text-muted-foreground">Groceries (purchased/open)</div>
+            <div className="text-2xl font-semibold">{summary ? `${summary.groceries.purchased}/${summary.groceries.open + summary.groceries.purchased}` : '—'}</div>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="rounded-xl border p-3">
+            <div className="font-medium mb-2">Weight</div>
+            <div className="flex items-center gap-2">
+              <Input type="number" value={weight} onChange={(e)=> setWeight(e.target.value)} placeholder="lb" />
+              <Button onClick={addWeight}>Add</Button>
+            </div>
+            <div className="mt-2 text-sm text-muted-foreground">Last logs</div>
+            <ul className="text-sm space-y-1 mt-1">
+              {weightList.map((w)=> (
+                <li key={w.id}>{w.when.slice(0,16).replace('T',' ')} — <b>{w.weight_lb} lb</b></li>
+              ))}
+              {weightList.length === 0 && <li className="text-muted-foreground">No entries.</li>}
+            </ul>
+          </div>
+
+          <div className="rounded-xl border p-3">
+            <div className="font-medium mb-2">Blood sugar</div>
+            {intake?.diabetic ? (
+              <>
+                <div className="flex items-center gap-2">
+                  <Input type="number" value={glucose} onChange={(e)=> setGlucose(e.target.value)} placeholder="mg/dL" />
+                  <Button onClick={addGlucose}>Add</Button>
+                </div>
+                <div className="mt-2 text-sm text-muted-foreground">Last logs</div>
+                <ul className="text-sm space-y-1 mt-1">
+                  {glucoseList.map((g)=> (
+                    <li key={g.id}>{g.when.slice(0,16).replace('T',' ')} — <b>{g.mg_dL} mg/dL</b></li>
+                  ))}
+                  {glucoseList.length === 0 && <li className="text-muted-foreground">No entries.</li>}
+                </ul>
+              </>
+            ) : (
+              <div className="text-sm text-muted-foreground">Blood sugar tracker enabled if diabetic is set in About You.</div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+/* -----------------------------
    Workout Plan (generate + track)
 ------------------------------ */
 function WorkoutPlan({ api }) {
@@ -1435,12 +1439,15 @@ function WorkoutPlan({ api }) {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState({});
+  const [prefs, setPrefs] = useState(null);
   const keyFor = (sid) => `s-${sid}`;
   const toggle = (sid) => setOpen((p)=> ({...p, [keyFor(sid)]: !p[keyFor(sid)] }));
 
   async function loadWeek() {
     setLoading(true);
     try {
+      // Load preferences for display
+      try { const i = await api.request('/api/v1/intake'); setPrefs(i || null); } catch {}
       const today = new Date();
       const iso = (d)=> d.toISOString().slice(0,10);
       const start = iso(today);
@@ -1457,7 +1464,26 @@ function WorkoutPlan({ api }) {
     setLoading(true);
     setStatus("Generating workouts…");
     try {
-      await api.request('/api/v1/workouts/generate', { method:'POST', body:{ days: 7, persist: true }});
+      const resp = await api.request('/api/v1/workouts/generate', { method:'POST', body:{ days: 7, persist: true }});
+      // Optimistically render from response while persisted sessions are reloaded
+      if (resp && Array.isArray(resp.days)) {
+        setWorkouts(resp.days.map((s, idx) => ({
+          id: idx + 1,
+          date: s.date,
+          title: s.title || 'Workout',
+          location: (prefs && prefs.gym) || null,
+          exercises: (s.exercises || []).map((e, j) => ({
+            id: (idx+1)*100 + j,
+            name: e.name,
+            machine: e.machine,
+            sets: e.sets,
+            reps: e.reps,
+            target_weight: e.target_weight,
+            rest_sec: e.rest_sec,
+            complete: false,
+          })),
+        })));
+      }
       await loadWeek();
       setStatus("Generated for this week");
     } catch (e) {
@@ -1482,7 +1508,14 @@ function WorkoutPlan({ api }) {
           <Dumbbell className="w-5 h-5" />
           Workout Plan
         </CardTitle>
-        <CardDescription>Generate a 7‑day workout plan based on your preferences. Track completion per exercise.</CardDescription>
+        <CardDescription>
+          Generate a 7‑day workout plan based on your preferences. Track completion per exercise.
+          {prefs && (
+            <div className="mt-1 text-xs text-muted-foreground">
+              Prefs: {prefs.workout_days_per_week || '—'} days/week · {prefs.workout_session_min || '—'} min · {prefs.workout_time || '—'} time
+            </div>
+          )}
+        </CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4">
         <div className="flex items-center gap-3 flex-wrap">
@@ -1534,7 +1567,7 @@ function WorkoutPlan({ api }) {
 /* -----------------------------
    Trackers (weight + glucose)
 ------------------------------ */
-function Trackers() {
+function TrackersLocal() {
   const [entries, setEntries] = useState(() => ls.get("diet.track", []));
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [weight, setWeight] = useState("");
@@ -1701,7 +1734,13 @@ function Workouts() {
 ------------------------------ */
 export default function App() {
   const api = useApi();
-  const [active, setActive] = useState("meal");
+  const initialTab = (() => {
+    try {
+      const t = new URLSearchParams(window.location.search).get('tab');
+      return t || 'meal';
+    } catch { return 'meal'; }
+  })();
+  const [active, setActive] = useState(initialTab);
 
   return (
     <div className="min-h-[100dvh] bg-gradient-to-b from-background to-muted/30">
@@ -1726,9 +1765,6 @@ export default function App() {
       <main className="w-full px-6 py-6 md:py-8 lg:py-10 grid gap-5 md:gap-8 lg:gap-10">
         <Tabs value={active} onValueChange={setActive} className="w-full">
           <TabsList className="flex flex-wrap gap-2">
-            <TabsTrigger value="settings" className="gap-2">
-              <SettingsIcon className="w-4 h-4" /> Settings
-            </TabsTrigger>
             <TabsTrigger value="meal" className="gap-2">
               <Utensils className="w-4 h-4" /> Meal Plan
             </TabsTrigger>
@@ -1744,14 +1780,10 @@ export default function App() {
             <TabsTrigger value="trackers" className="gap-2">
               <BarChart3 className="w-4 h-4" /> Trackers
             </TabsTrigger>
-            <TabsTrigger value="explorer" className="gap-2">
-              <Database className="w-4 h-4" /> Explorer
-            </TabsTrigger>
+            
           </TabsList>
 
-          <TabsContent value="settings">
-            <SettingsPanel api={api} />
-          </TabsContent>
+          
           <TabsContent value="meal">
             <MealPlan api={api} />
           </TabsContent>
@@ -1765,11 +1797,9 @@ export default function App() {
             <WorkoutPlan api={api} />
           </TabsContent>
           <TabsContent value="trackers">
-            <Trackers />
+            <Trackers api={api} />
           </TabsContent>
-          <TabsContent value="explorer">
-            <ApiExplorer api={api} />
-          </TabsContent>
+          
         </Tabs>
       </main>
 

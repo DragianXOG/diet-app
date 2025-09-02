@@ -98,6 +98,11 @@ def _ensure_schema():
                     conn.execute(_sa_text('ALTER TABLE intakes ADD COLUMN workout_time VARCHAR(8)'))
                 except Exception:
                     pass
+            if 'avoid_ingredients' not in cols:
+                try:
+                    conn.execute(_sa_text('ALTER TABLE intakes ADD COLUMN avoid_ingredients TEXT'))
+                except Exception:
+                    pass
     except Exception:
         # Inspector may fail on fresh DB; ignore
         pass

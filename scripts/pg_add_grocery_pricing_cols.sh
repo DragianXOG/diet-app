@@ -18,7 +18,7 @@ fi
 
 if [[ -z "${DBURL}" ]]; then
   echo "❌ DATABASE_URL not found. Export it and re-run, e.g.:"
-  echo "   export DATABASE_URL='postgresql+psycopg2://user:pass@host/dbname'"
+  echo "   export DATABASE_URL='postgresql+psycopg://user:pass@host/dbname'"
   exit 1
 fi
 

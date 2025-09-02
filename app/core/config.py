@@ -26,8 +26,8 @@ class Settings:
     UI_BASE: str | None = os.getenv("UI_BASE") or None
     UI_PORT: int = int(os.getenv("UI_PORT", "8080"))
 
-    # LLM toggle (OpenAI)
-    LLM_ENABLED: bool = os.getenv("LLM_ENABLED", "0") == "1"
+    # LLM toggle (OpenAI) — enabled by default; falls back safely if no API key
+    LLM_ENABLED: bool = os.getenv("LLM_ENABLED", "1") == "1"
     LLM_PROVIDER: str | None = os.getenv("LLM_PROVIDER") or "openai"
     OPENAI_API_KEY: str | None = os.getenv("OPENAI_API_KEY") or None
 

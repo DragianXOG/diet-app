@@ -39,6 +39,8 @@ class Intake(SQLModel, table=True):
     conditions: Optional[str] = Field(default=None)
     meds: Optional[str] = Field(default=None)
     goals: Optional[str] = Field(default=None)
+    # Comma-separated list of ingredients to avoid (preferences)
+    avoid_ingredients: Optional[str] = Field(default=None, sa_column=sa.Column(sa.Text))
     # Optional explicit meals/day preference (2-6 typical)
     meals_per_day: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
     zip: Optional[str] = Field(default=None)
@@ -125,3 +127,26 @@ class WorkoutExercise(SQLModel, table=True):
     complete: bool = Field(default=False, sa_column=sa.Column(sa.Boolean, index=True, nullable=False))
     actual_reps: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
     actual_weight: Optional[int] = Field(default=None, sa_column=sa.Column(sa.Integer))
+
+class WeightLog(SQLModel, table=True):
+    __tablename__ = 'weight_logs'
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(sa_column=sa.Column(sa.Integer, sa.ForeignKey('users.id', ondelete='CASCADE'), index=True, nullable=False))
+    when: datetime = Field(default_factory=datetime.utcnow, sa_column=sa.Column(sa.DateTime, index=True, nullable=False))
+    weight_lb: int = Field(sa_column=sa.Column(sa.Integer, nullable=False))
+
+class GlucoseLog(SQLModel, table=True):
+    __tablename__ = 'glucose_logs'
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(sa_column=sa.Column(sa.Integer, sa.ForeignKey('users.id', ondelete='CASCADE'), index=True, nullable=False))
+    when: datetime = Field(default_factory=datetime.utcnow, sa_column=sa.Column(sa.DateTime, index=True, nullable=False))
+    mg_dL: int = Field(sa_column=sa.Column(sa.Integer, nullable=False))
+
+class MealCheck(SQLModel, table=True):
+    __tablename__ = 'meal_checks'
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(sa_column=sa.Column(sa.Integer, sa.ForeignKey('users.id', ondelete='CASCADE'), index=True, nullable=False))
+    date: datetime = Field(default_factory=datetime.utcnow, sa_column=sa.Column(sa.DateTime, index=True, nullable=False))
+    title: str = Field(sa_column=sa.Column(sa.String(160), nullable=False))
+    complete: bool = Field(default=False, sa_column=sa.Column(sa.Boolean, index=True, nullable=False))
+    completed_at: Optional[datetime] = Field(default=None, sa_column=sa.Column(sa.DateTime))

@@ -67,7 +67,7 @@ export default function Intake() {
     diabetic: false, conditions: "", meds: "", goals: "", zip: "", gym: "",
     workout_days_per_week: "", workout_session_min: "", workout_time: "",
     meals_per_day: "",
-    food_notes: "", workout_notes: ""
+    food_notes: "", workout_notes: "", avoid_ingredients: ""
   });
   const [errors, setErrors] = useState({});
   const [touched, setTouched] = useState({});
@@ -81,6 +81,18 @@ export default function Intake() {
   }, []);
 
   function setField(k, v){ setForm(prev => ({ ...prev, [k]: v })); }
+  
+  // Ingredient preferences
+  const INGREDIENT_OPTIONS = [
+    'seafood','shellfish','fish','pork','beef','chicken','turkey','eggs','dairy','cheese','milk','yogurt','tofu','soy','gluten','wheat','nuts','peanuts','tree nuts','legumes','beans','lentils','onions','garlic','scallions','mushrooms','broccoli','cauliflower','peppers','tomatoes','spinach'
+  ];
+  const avoidSet = useMemo(() => new Set(String(form.avoid_ingredients||'').split(',').map(s=>s.trim()).filter(Boolean)), [form.avoid_ingredients]);
+  const isSelected = (name) => !avoidSet.has(name);
+  const toggleIngredient = (name) => {
+    const s = new Set(avoidSet);
+    if (s.has(name)) s.delete(name); else s.add(name);
+    setField('avoid_ingredients', Array.from(s).join(', '));
+  };
   function onBlurField(k){ setTouched(prev => ({ ...prev, [k]: true })); }
 
   function validate(f){
@@ -113,9 +125,7 @@ export default function Intake() {
   useEffect(() => {
     const timer = setTimeout(() => {
       try {
-        const fields = [
-          'name','age','height_in','weight_lb','zip','gym','conditions','meds','goals','food_notes','workout_notes'
-        ];
+        const fields = ['name','age','height_in','weight_lb','zip','gym','conditions','meds','goals','food_notes','workout_notes','avoid_ingredients'];
         const updates = {};
         fields.forEach(id => {
           const el = document.getElementById(`intake-${id}`);
@@ -151,6 +161,10 @@ export default function Intake() {
       }
       setSaving(true);
       const payload = { ...form };
+      if (payload.avoid_ingredients) {
+        const list = String(payload.avoid_ingredients).split(',').map(s=>s.trim()).filter(Boolean);
+        payload.avoid_ingredients = Array.from(new Set(list)).join(',');
+      }
       // Normalize optional numerics (only set when valid)
       payload.age = (form.age !== '' && !Number.isNaN(Number(form.age))) ? Number(form.age) : undefined;
       payload.height_in = (form.height_in !== '' && !Number.isNaN(Number(form.height_in))) ? Number(form.height_in) : undefined;
@@ -198,6 +212,18 @@ export default function Intake() {
             <div className="flex justify-end gap-3 mt-5">
               <Button variant="secondary" onClick={()=>{ setMedOpen(false); setMedAgree(false); }}>Cancel</Button>
               <Button onClick={()=>{ if(!medAgree) return; localStorage.setItem('diet.medicalAccepted','1'); setMedOpen(false); if(localStorage.getItem('diet.gdprAccepted') !== '1') setGdprOpen(true); }}>I Agree</Button>
+            </div>
+          </div>
+          <div className="grid gap-1 md:col-span-2">
+            <Label>Ingredient preferences</Label>
+            <p className="text-xs text-muted-foreground mb-2">Default is everything selected. Uncheck ingredients you want to avoid.</p>
+            <div className="grid md:grid-cols-3 gap-2">
+              {INGREDIENT_OPTIONS.map((name) => (
+                <label key={name} className="flex items-center gap-2 text-sm border rounded-lg p-2 bg-white/80">
+                  <input type="checkbox" checked={isSelected(name)} onChange={()=>toggleIngredient(name)} />
+                  <span className="capitalize">{name}</span>
+                </label>
+              ))}
             </div>
           </div>
         </div>

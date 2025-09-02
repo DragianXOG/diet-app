@@ -48,7 +48,7 @@ export default function Login() {
       }
       const params = new URLSearchParams(location.search);
       const next = params.get('next');
-      nav(next && next.startsWith('/') ? next : '/app');
+      nav(next && next.startsWith('/') ? next : '/app?tab=about');
     } catch (e2) {
       setErr(String(e2?.message || e2));
     } finally { setBusy(false); }

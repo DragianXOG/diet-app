@@ -18,7 +18,10 @@ from app.core.db import get_session
 from app.core.config import settings
 from app.core import llm as _llm
 # Auth removed in LAN mode
-from app.models import User, Intake, Meal, MealItem, WorkoutSession, WorkoutExercise  # NOTE: avoid GroceryItem mapping to bypass missing cols
+from app.models import (
+    User, Intake, Meal, MealItem, WorkoutSession, WorkoutExercise,
+    WeightLog, GlucoseLog, MealCheck,
+)  # NOTE: avoid GroceryItem mapping to bypass missing cols
 
 import os as _os
 from datetime import datetime as _dt
@@ -62,6 +65,7 @@ class IntakeIn(BaseModel):
     workout_days_per_week: Optional[int] = None
     workout_session_min: Optional[int] = None
     workout_time: Optional[str] = None
+    avoid_ingredients: Optional[str] = None
 
 # ------------------------------------------------------------------------------
 # RLS helpers (Postgres set_config pinned to the same connection) + rls_session
@@ -241,6 +245,7 @@ class RationalizeOut(BaseModel):
     times: List[str]
     protein_target: Optional[int] = None
     carb_target: Optional[int] = None
+    calorie_target: Optional[int] = None
     safety_required: bool = False
     warnings: List[str] = []
 
@@ -301,6 +306,64 @@ def rationalize_intake(
         times = _times_for_mpd(mpd)
         protein = 140 if low_carb else 110
         carb = 120 if low_carb else 200
+
+        # Compute calorie target from intake using Mifflin-St Jeor + activity and goal rate
+        def _loss_per_week(text: str) -> float | None:
+            t = (text or '').lower()
+            m = re.search(r"(\\d+(?:\\.\\d+)?)\\s*(lb|pounds?)\\s*(?:per\\s*week|/\\s*week)", t)
+            if m:
+                try:
+                    return float(m.group(1))
+                except Exception:
+                    return None
+            m2 = re.search(r"lose\\s+(\\d+(?:\\.\\d+)?)\\s*(lb|pounds?)\\s*(?:in|over)\\s+(\\d+)\\s*(weeks?|wks?)", t)
+            if m2:
+                try:
+                    total = float(m2.group(1)); weeks = float(m2.group(3))
+                    if weeks > 0:
+                        return total / weeks
+                except Exception:
+                    return None
+            return None
+
+        def _calorie_target_from_intake(intake_obj) -> Optional[int]:
+            try:
+                age = int(getattr(intake_obj, 'age', 0) or 0)
+                sex = (getattr(intake_obj, 'sex', '') or '').upper()
+                height_in = int(getattr(intake_obj, 'height_in', 0) or 0)
+                weight_lb = int(getattr(intake_obj, 'weight_lb', 0) or 0)
+                if not (age and height_in and weight_lb):
+                    return None
+                kg = weight_lb * 0.45359237
+                cm = height_in * 2.54
+                s = 5 if sex == 'M' else (-161 if sex == 'F' else -78)
+                bmr = 10*kg + 6.25*cm - 5*age + s
+                # Activity from workout days/week
+                try:
+                    wdw = int(getattr(intake_obj, 'workout_days_per_week', 0) or 0)
+                except Exception:
+                    wdw = 0
+                if wdw <= 0:
+                    act = 1.2
+                elif wdw <= 2:
+                    act = 1.3
+                elif wdw <= 4:
+                    act = 1.5
+                elif wdw <= 6:
+                    act = 1.7
+                else:
+                    act = 1.9
+                tdee = bmr * act
+                rate = _loss_per_week(getattr(intake_obj, 'goals', '') or notes)
+                rate = rate if (isinstance(rate, (int,float)) and rate > 0) else 1.0
+                deficit = min(1000.0, max(250.0, rate * 500.0))
+                target = int(round(tdee - deficit))
+                floor = 1200 if sex == 'F' else 1400
+                return max(floor, target)
+            except Exception:
+                return None
+
+        calorie_target = _calorie_target_from_intake(intake)
         if aggressive:
             warns.append("Aggressive goal pace — consider medical guidance.")
         if getattr(intake, 'diabetic', False) and not low_carb:
@@ -312,6 +375,7 @@ def rationalize_intake(
             times=times,
             protein_target=protein,
             carb_target=carb,
+            calorie_target=calorie_target,
             safety_required=aggressive,
             warnings=warns,
         )
@@ -494,6 +558,25 @@ def _make_recipe(title: str) -> Dict[str, Any]:
     ]
     return {"ingredients": ing, "steps": steps}
 
+def _kcal_for_title(title: str) -> int:
+    t = _normalize_name(title)
+    # Simple heuristic calorie estimates per serving
+    table = {
+        'grilled chicken salad': 520,
+        'salmon and broccoli': 550,
+        'greek yogurt bowl': 380,
+        'eggs and spinach': 410,
+        'turkey lettuce wraps': 540,
+        'tofu stir-fry': 480,
+        'quinoa veggie bowl': 520,
+        'lean beef + veg': 560,
+    }
+    for key, val in table.items():
+        if key in t:
+            return val
+    # Fallback default
+    return 500
+
 def _default_pairs() -> List[str]:
     return [
         "Grilled Chicken Salad",
@@ -558,13 +641,76 @@ def generate_plan(
         meals_per_day = r.meals_per_day if isinstance(r, RationalizeOut) else 2
         times = r.times if isinstance(r, RationalizeOut) else ["12:00", "18:00"]
 
-        # Avoidance keywords from notes (simple heuristics)
+        # Avoidance keywords from explicit preferences + notes
         avoids: List[str] = []
-        for key in ["cilantro", "pork", "beef", "dairy", "gluten"]:
+        # From structured intake (comma-separated)
+        try:
+            ai = (getattr(intake, 'avoid_ingredients', '') or '')
+            for a in str(ai).split(','):
+                a = a.strip().lower()
+                if a:
+                    avoids.append(a)
+        except Exception:
+            pass
+        # From notes (heuristic)
+        for key in ["cilantro", "pork", "beef", "dairy", "gluten", "egg", "eggs", "mushroom", "onion", "fish", "seafood", "shellfish", "chicken", "turkey"]:
             if key in notes_l:
                 avoids.append(key)
+        # Expand broad categories to common synonyms
+        expand = {
+            'seafood': ['fish','salmon','tuna','shrimp','crab','lobster','scallop'],
+            'shellfish': ['shrimp','crab','lobster','scallop'],
+            'fish': ['fish','salmon','tuna'],
+            'dairy': ['dairy','milk','cheese','yogurt','cream'],
+            'eggs': ['egg','eggs'],
+            'onions': ['onion','onions','scallion','scallions','green onion'],
+            'scallions': ['scallion','scallions','green onion'],
+            'mushrooms': ['mushroom','mushrooms'],
+            'nuts': ['nut','nuts','peanuts','almonds','walnuts','cashews','tree nuts'],
+            'gluten': ['gluten','wheat','bread','pasta'],
+            'beef': ['beef'],
+            'pork': ['pork'],
+            'chicken': ['chicken'],
+            'turkey': ['turkey'],
+        }
+        avoids_expanded: List[str] = []
+        for a in avoids:
+            avoids_expanded.append(a)
+            avoids_expanded.extend(expand.get(a, []))
+        # Normalize and de-duplicate
+        avoids = sorted(set(a.strip().lower() for a in avoids_expanded if a))
 
-        # Choose recipe titles tailored to flags
+        # If LLM is enabled, attempt LLM-driven plan using PhD Coach logic
+        if settings.LLM_ENABLED:
+            try:
+                kcal_target = getattr(r, 'calorie_target', None) if isinstance(r, RationalizeOut) else None
+                plan_llm = _llm.generate_diet_plan(intake=intake, days=req.days, meals_per_day=meals_per_day, avoids=avoids, calorie_target=kcal_target)
+            except Exception:
+                plan_llm = None
+            if plan_llm:
+                plan_json = plan_llm
+                # Persist minimal meal rows if requested
+                if req.persist:
+                    for day in plan_json.get('days', []):
+                        d = date.fromisoformat(str(day.get('date')))
+                        for meal_stub in (day.get('meals') or []):
+                            m = Meal(user_id=user.id)  # type: ignore[call-arg]
+                            _safe_set(m, "date", d)
+                            if hasattr(m, "title"):
+                                m.title = meal_stub.get("title") or "Meal"  # type: ignore[attr-defined]
+                            elif hasattr(m, "name"):
+                                m.name = meal_stub.get("title") or "Meal"  # type: ignore[attr-defined]
+                            if hasattr(m, "eaten_at"):
+                                try:
+                                    tt = time.fromisoformat(meal_stub.get("time") or "12:00")
+                                except Exception:
+                                    tt = time(12, 0)
+                                _safe_set(m, "eaten_at", datetime.combine(d, tt))
+                            session.add(m)
+                    session.commit()
+                return plan_json
+
+        # Choose recipe titles tailored to flags (heuristic fallback)
         titles = _pick_recipes(intake, low_carb=('lower' in r.diet_label.lower() if isinstance(r, RationalizeOut) else False), diabetic=diabetic_flag, avoids=avoids, count=req.days * meals_per_day)
 
         # Build plan days
@@ -575,7 +721,13 @@ def generate_plan(
             for j in range(meals_per_day):
                 title = titles[k % len(titles)]; k += 1
                 rec = _make_recipe(title) if req.include_recipes else None
-                meal_obj = {"time": times[j % len(times)], "title": title}
+                # Calorie target per meal: distribute daily target evenly if available
+                try:
+                    kcal_target = getattr(r, 'calorie_target', None)
+                except Exception:
+                    kcal_target = None
+                per_meal_kcal = int(round((kcal_target or 1800) / max(1, meals_per_day)))
+                meal_obj = {"time": times[j % len(times)], "title": title, "kcal": per_meal_kcal}
                 if rec:
                     meal_obj.update({"ingredients": rec.get("ingredients"), "steps": rec.get("steps")})
                 day_meals.append(meal_obj)
@@ -677,6 +829,33 @@ def _equipment_from_notes(intake: Optional[Intake]) -> Dict[str, bool]:
       'home': 'home' in txt,
       'yoga': 'yoga' in txt,
     }
+
+def _sessions_per_week(intake: Optional[Intake]) -> int:
+    try:
+        v = int(getattr(intake, 'workout_days_per_week', None) or 0)
+        if v:
+            return max(1, min(7, v))
+    except Exception:
+        pass
+    txt = ((getattr(intake, 'workout_notes', '') or '') + ' ' + (getattr(intake, 'goals', '') or '')).lower()
+    m = re.search(r"(\d+)\s*(?:-\s*(\d+))?\s*(?:days|sessions)\s*(?:/\s*week)?", txt)
+    if m:
+        a = int(m.group(1)); b = int(m.group(2)) if m.group(2) else None
+        return max(1, min(7, max(a, b) if b else a))
+    return 4
+
+def _session_minutes(intake: Optional[Intake]) -> int:
+    try:
+        v = int(getattr(intake, 'workout_session_min', None) or 0)
+        if v:
+            return max(15, min(120, v))
+    except Exception:
+        pass
+    txt = ((getattr(intake, 'workout_notes', '') or '') + ' ' + (getattr(intake, 'goals', '') or '')).lower()
+    m = re.search(r"(\d+)\s*min", txt)
+    if m:
+        return max(15, min(120, int(m.group(1))))
+    return 45
 
 def _build_day_template(eq: Dict[str,bool], day_index: int) -> List[Dict[str, Any]]:
     # Simple split: 0 Upper, 1 Lower, 2 Push, 3 Pull, 4 Core/Conditioning, repeat
@@ -837,6 +1016,116 @@ def update_exercise(
         return { 'ok': True, 'id': e.id, 'complete': e.complete, 'actual_reps': e.actual_reps, 'actual_weight': e.actual_weight }
 
 # ------------------------------------------------------------------------------
+# Trackers: weight & glucose; Meal checklist + summary
+# ------------------------------------------------------------------------------
+class WeightIn(BaseModel):
+    when: Optional[datetime] = None
+    weight_lb: int
+
+@router.get('/trackers/weight')
+def list_weight(*, session: Session = Depends(rls_session), user: User = Depends(auth_user), limit: int = 30):
+    with _rls(session, user.id):
+        q = select(WeightLog).where(WeightLog.user_id == user.id).order_by(WeightLog.when.desc()).limit(limit)
+        rows = session.exec(q).all()
+        return [{ 'id': r.id, 'when': r.when.isoformat(), 'weight_lb': r.weight_lb } for r in rows]
+
+@router.post('/trackers/weight')
+def add_weight(payload: WeightIn, *, session: Session = Depends(rls_session), user: User = Depends(auth_user)):
+    with _rls(session, user.id):
+        wl = WeightLog(user_id=user.id, when=payload.when or datetime.utcnow(), weight_lb=int(payload.weight_lb))
+        session.add(wl)
+        session.commit()
+        session.refresh(wl)
+        return { 'id': wl.id, 'when': wl.when.isoformat(), 'weight_lb': wl.weight_lb }
+
+class GlucoseIn(BaseModel):
+    when: Optional[datetime] = None
+    mg_dL: int
+
+@router.get('/trackers/glucose')
+def list_glucose(*, session: Session = Depends(rls_session), user: User = Depends(auth_user), limit: int = 30):
+    with _rls(session, user.id):
+        q = select(GlucoseLog).where(GlucoseLog.user_id == user.id).order_by(GlucoseLog.when.desc()).limit(limit)
+        rows = session.exec(q).all()
+        return [{ 'id': r.id, 'when': r.when.isoformat(), 'mg_dL': r.mg_dL } for r in rows]
+
+@router.post('/trackers/glucose')
+def add_glucose(payload: GlucoseIn, *, session: Session = Depends(rls_session), user: User = Depends(auth_user)):
+    with _rls(session, user.id):
+        gl = GlucoseLog(user_id=user.id, when=payload.when or datetime.utcnow(), mg_dL=int(payload.mg_dL))
+        session.add(gl)
+        session.commit()
+        session.refresh(gl)
+        return { 'id': gl.id, 'when': gl.when.isoformat(), 'mg_dL': gl.mg_dL }
+
+class MealCheckIn(BaseModel):
+    date: date
+    title: str
+    complete: bool = True
+
+@router.get('/checklists/meals')
+def list_meal_checks(*, session: Session = Depends(rls_session), user: User = Depends(auth_user), start: Optional[date] = Query(None), end: Optional[date] = Query(None)):
+    with _rls(session, user.id):
+        q = select(MealCheck).where(MealCheck.user_id == user.id)
+        if start: q = q.where(func.date(MealCheck.date) >= start)
+        if end: q = q.where(func.date(MealCheck.date) <= end)
+        q = q.order_by(MealCheck.date)
+        rows = session.exec(q).all()
+        return [{ 'id': r.id, 'date': r.date.date().isoformat(), 'title': r.title, 'complete': r.complete } for r in rows]
+
+@router.post('/checklists/meals')
+def mark_meal_check(payload: MealCheckIn, *, session: Session = Depends(rls_session), user: User = Depends(auth_user)):
+    with _rls(session, user.id):
+        d = datetime.combine(payload.date, time(12,0))
+        row = session.exec(select(MealCheck).where(MealCheck.user_id == user.id, func.date(MealCheck.date) == payload.date, MealCheck.title == payload.title)).first()
+        if not row:
+            row = MealCheck(user_id=user.id, date=d, title=payload.title, complete=bool(payload.complete), completed_at=(datetime.utcnow() if payload.complete else None))
+        else:
+            row.complete = bool(payload.complete)
+            row.completed_at = datetime.utcnow() if payload.complete else None
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        return { 'id': row.id, 'date': row.date.date().isoformat(), 'title': row.title, 'complete': row.complete }
+
+@router.get('/checklists/summary')
+def checklists_summary(*, session: Session = Depends(rls_session), user: User = Depends(auth_user), start: Optional[date] = Query(None), end: Optional[date] = Query(None)):
+    with _rls(session, user.id):
+        # Meals (from checks)
+        mq = select(MealCheck).where(MealCheck.user_id == user.id)
+        if start: mq = mq.where(func.date(MealCheck.date) >= start)
+        if end: mq = mq.where(func.date(MealCheck.date) <= end)
+        mrows = session.exec(mq).all()
+        meals_total = len(mrows)
+        meals_done = sum(1 for r in mrows if r.complete)
+
+        # Workouts (exercises complete)
+        wq = select(WorkoutSession).where(WorkoutSession.user_id == user.id)
+        if start: wq = wq.where(func.date(WorkoutSession.date) >= start)
+        if end: wq = wq.where(func.date(WorkoutSession.date) <= end)
+        sess = session.exec(wq).all()
+        ex_total = 0
+        ex_done = 0
+        for s in sess:
+            exs = session.exec(select(WorkoutExercise).where(WorkoutExercise.session_id == s.id)).all()
+            ex_total += len(exs)
+            ex_done += sum(1 for e in exs if e.complete)
+
+        # Groceries (open vs purchased)
+        try:
+            rows = session.exec(text("SELECT COUNT(*) FILTER (WHERE COALESCE(purchased,false)=false), COUNT(*) FILTER (WHERE COALESCE(purchased,false)=true) FROM grocery_items WHERE user_id=:uid").bindparams(uid=user.id)).first()
+            gro_open = int(rows[0]) if rows else 0
+            gro_purch = int(rows[1]) if rows else 0
+        except Exception:
+            gro_open = gro_purch = 0
+
+        return {
+          'meals': { 'total': meals_total, 'completed': meals_done },
+          'workouts': { 'exercises_total': ex_total, 'completed': ex_done },
+          'groceries': { 'open': gro_open, 'purchased': gro_purch },
+        }
+
+# ------------------------------------------------------------------------------
 # Groceries (RAW SQL; never reference missing pricing columns)
 #   - add_grocery
 #   - list_groceries
@@ -930,7 +1219,7 @@ def sync_groceries_from_meals(
     start: date = Query(..., description="YYYY-MM-DD"),
     end: date = Query(..., description="YYYY-MM-DD"),
     persist: bool = Query(True),
-    clear_existing: bool = Query(False),
+    clear_existing: bool = Query(True),
     seed_if_empty: bool = Query(
         True,
         description="If no meals exist in window, seed a default 7-day, 2-meals/day plan (and persist meals when persist=true).",
@@ -1021,16 +1310,17 @@ def sync_groceries_from_meals(
                 """).bindparams(uid=user.id, nm=nm)
                 row = session.exec(sel).mappings().first()
                 if row:
+                    # Idempotent: set to computed quantity instead of incrementing
                     if "updated_at" in cols:
                         upd = text("""
                             UPDATE grocery_items
-                            SET quantity = COALESCE(quantity,0) + :add,
+                            SET quantity = :qty,
                                 updated_at = CURRENT_TIMESTAMP
                             WHERE id=:id
-                        """).bindparams(add=float(qty), id=row["id"])
+                        """).bindparams(qty=float(qty), id=row["id"])
                     else:
-                        upd = text("UPDATE grocery_items SET quantity = COALESCE(quantity,0) + :add WHERE id=:id") \
-                            .bindparams(add=float(qty), id=row["id"])
+                        upd = text("UPDATE grocery_items SET quantity = :qty WHERE id=:id") \
+                            .bindparams(qty=float(qty), id=row["id"])
                     session.exec(upd)
                 else:
                     if {"created_at", "updated_at"} <= cols:

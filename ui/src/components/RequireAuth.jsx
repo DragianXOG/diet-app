@@ -15,12 +15,14 @@ export default function RequireAuth({ children }){
         if (res.ok) { setOk(true); }
         else {
           setOk(false);
-          nav(`/login?next=${encodeURIComponent(loc.pathname)}`);
+          const next = `${loc.pathname}${loc.search || ''}`;
+          nav(`/login?next=${encodeURIComponent(next)}`);
         }
       } catch {
         if (!alive) return;
         setOk(false);
-        nav(`/login?next=${encodeURIComponent(loc.pathname)}`);
+        const next = `${loc.pathname}${loc.search || ''}`;
+        nav(`/login?next=${encodeURIComponent(next)}`);
       }
     })();
     return () => { alive = false; };
@@ -30,4 +32,3 @@ export default function RequireAuth({ children }){
   if (ok === false) return null;
   return children;
 }
-

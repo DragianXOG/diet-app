@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from sqlmodel import select, Session
 
 from ..core.config import settings
+import os
 from ..core.db import get_session
 from ..models import Ping
 
@@ -10,7 +11,13 @@ router = APIRouter()
 
 @router.get("/status")
 def status():
-    return {"ok": True, "app": settings.APP_NAME, "version": settings.VERSION}
+    return {
+        "ok": True,
+        "app": settings.APP_NAME,
+        "version": settings.VERSION,
+        "llm_enabled": settings.LLM_ENABLED,
+        "llm_key_present": bool(os.getenv("OPENAI_API_KEY")),
+    }
 
 @router.get("/version")
 def version():

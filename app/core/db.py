@@ -1,36 +1,26 @@
 from sqlmodel import SQLModel, create_engine, Session
-from sqlalchemy import event
 from sqlalchemy.engine import make_url
 import os
 
-# DATABASE_URL may point to sqlite or postgres; handle both correctly
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///data/app.db")
-_url = make_url(DATABASE_URL)
-_IS_SQLITE = (_url.get_backend_name() == "sqlite")
+# Require Postgres in this environment
+DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    raise RuntimeError(
+        "DATABASE_URL is required and must point to Postgres (e.g. postgresql+psycopg://user:pass@host/db)."
+    )
 
-# Only pass SQLite-specific connect_args to SQLite engines
-_connect_args = {"check_same_thread": False} if _IS_SQLITE else {}
+_url = make_url(DATABASE_URL)
+_backend = _url.get_backend_name()
+if not _backend.startswith("postgres"):
+    raise RuntimeError(
+        f"Unsupported database backend '{_backend}'. This deployment is Postgres-only."
+    )
 
 engine = create_engine(
     DATABASE_URL,
     echo=False,
-    connect_args=_connect_args,
     pool_pre_ping=True,
 )
-
-# Apply SQLite PRAGMAs only when using SQLite
-if _IS_SQLITE:
-    @event.listens_for(engine, "connect")
-    def _set_sqlite_pragma(dbapi_connection, connection_record):
-        try:
-            cur = dbapi_connection.cursor()
-            cur.execute("PRAGMA journal_mode=WAL;")
-            cur.execute("PRAGMA synchronous=NORMAL;")
-            cur.execute("PRAGMA busy_timeout=5000;")  # ms
-            cur.close()
-        except Exception:
-            # Non-SQLite or driver quirk: ignore
-            pass
 
 def get_session():
     with Session(engine) as session:

@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     ]
 
     # DB connection
-    DATABASE_URL: str = "postgresql://life_app:lifeapp_local@127.0.0.1:5432/dietapp"
+    DATABASE_URL: str = "postgresql+psycopg://life_app:lifeapp_local@127.0.0.1:5432/dietapp"
 
     # Auth removed in LAN-only mode
 
