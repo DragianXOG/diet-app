@@ -7,7 +7,7 @@ load_dotenv()
 
 class Settings:
     APP_NAME: str = os.getenv("APP_NAME", "Diet App")
-    VERSION: str = os.getenv("APP_VERSION", "0.3.0")
+    VERSION: str = os.getenv("APP_VERSION", "0.4.0")
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
     # CORS
