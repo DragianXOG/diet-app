@@ -13,7 +13,9 @@ Postgres‑backed FastAPI + React app for planning nutrition and workouts. Now i
 - Groceries: idempotent sync from meal plan; quantities don’t inflate on rebuild.
 
 ## Quick Start (Local Dev)
-1) python3 -m venv .venv
+Requirements: Python 3.12, Node.js 20.x, npm 10+
+
+1) python3 -m venv .venv   # Python 3.12 recommended
 2) source .venv/bin/activate
 3) pip install -r requirements.txt
 4) cp .env.example .env and set a Postgres `DATABASE_URL`
